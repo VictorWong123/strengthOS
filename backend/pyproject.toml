@@ -1,14 +1,14 @@
 [project]
 name = "strengthos-backend"
 version = "0.1.0"
-description = "FastAPI management jobs for strengthOS."
+description = "FastAPI and FastMCP backend for strengthOS."
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "httpx>=0.27",
   "pydantic-settings>=2.4",
-  "libsql>=0.1",
+  "fastmcp>=2.0",
 ]
 
 [project.optional-dependencies]

@@ -90,6 +90,8 @@ class SupabaseService:
         range_start: int | None = None,
         range_end: int | None = None,
         in_filters: dict[str, Iterable[str]] | None = None,
+        order: str | None = None,
+        limit: int | None = None,
         **filters: str,
     ) -> list[dict[str, Any]]:
         """Select rows from a Supabase table using PostgREST filters.
@@ -102,6 +104,12 @@ class SupabaseService:
         if (range_start is None) != (range_end is None):
             raise ValueError("range_start and range_end must be provided together.")
         params: dict[str, str] = {"select": select, **filters}
+        if order:
+            params["order"] = order
+        if limit is not None:
+            if limit < 1:
+                raise ValueError("limit must be greater than zero.")
+            params["limit"] = str(limit)
         if in_filters:
             for column, values in in_filters.items():
                 values_list = list(values)
@@ -122,6 +130,7 @@ class SupabaseService:
         *,
         page_size: int = 1000,
         in_filters: dict[str, Iterable[str]] | None = None,
+        order: str | None = None,
         **filters: str,
     ) -> list[dict[str, Any]]:
         """Select all matching rows by paging through PostgREST ranges."""
@@ -137,6 +146,7 @@ class SupabaseService:
                 range_start=start,
                 range_end=start + page_size - 1,
                 in_filters=in_filters,
+                order=order,
                 **filters,
             )
             rows.extend(page)

@@ -7,9 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration for private backend jobs and endpoints."""
+    """Runtime configuration for backend jobs, authenticated APIs, and MCP tools."""
 
     supabase_url: str = ""
+    supabase_anon_key: SecretStr = SecretStr("")
     supabase_service_role_key: SecretStr = SecretStr("")
     exercise_api_provider: str = "seed"
     exercise_api_key: SecretStr = SecretStr("")
@@ -18,13 +19,11 @@ class Settings(BaseSettings):
     exercise_sync_page_size: int = Field(default=100, ge=1, le=500)
     exercise_api_max_retries: int = Field(default=3, ge=0, le=10)
     exercise_api_max_retry_delay_seconds: int = Field(default=30, ge=1, le=300)
-    turso_database_url: str = ""
-    turso_auth_token: SecretStr = SecretStr("")
-    turso_export_user_id: str = ""
-    frontend_origin: str = "http://localhost:5173"
+    frontend_url: str = "http://localhost:5173"
+    frontend_origin: str = ""
     admin_api_key: SecretStr = SecretStr("")
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
     def has_exercise_credentials(self) -> bool:
@@ -39,31 +38,22 @@ class Settings(BaseSettings):
         return bool(self.supabase_url and self.supabase_service_role_key.get_secret_value())
 
     @property
-    def has_turso_credentials(self) -> bool:
-        """Return whether the Turso/libSQL export target is fully configured.
+    def has_supabase_auth_credentials(self) -> bool:
+        """Return whether Supabase Auth bearer tokens can be validated."""
 
-        Local libSQL database paths do not require an auth token. Remote Turso
-        URLs do require one, and missing remote auth should fail before export
-        work begins.
-        """
-
-        if not self.turso_database_url:
-            return False
-        if self.is_remote_turso_database:
-            return bool(self.turso_auth_token.get_secret_value())
-        return True
-
-    @property
-    def is_remote_turso_database(self) -> bool:
-        """Return whether the configured libSQL database points at remote Turso."""
-
-        return self.turso_database_url.startswith(("libsql://", "http://", "https://"))
+        return bool(self.supabase_url and self.supabase_anon_key.get_secret_value())
 
     @property
     def has_admin_api_key(self) -> bool:
         """Return whether management endpoints can require an admin key."""
 
         return bool(self.admin_api_key.get_secret_value())
+
+    @property
+    def allowed_frontend_origins(self) -> list[str]:
+        """Return configured browser origins, including the legacy env name."""
+
+        return sorted({"http://localhost:5173", self.frontend_url, self.frontend_origin} - {""})
 
 
 @lru_cache

@@ -2,39 +2,33 @@ import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr
 
+from app.auth import dependencies as auth_dependencies
+from app.auth.dependencies import extract_bearer_token, verify_supabase_token
 from app.config import Settings
 from app.providers.exercisedb import ExerciseDBProvider
 from app.providers.factory import get_exercise_provider
 from app.providers.seed import SeedExerciseProvider
+from app.repositories import supabase_training as training_repository_module
+from app.repositories.supabase_training import TrainingRepository
 from app.routers import admin
-from app.services import turso_export as turso_export_module
-from app.services.exercise_sync import safe_error_message
 from app.services import supabase as supabase_module
+from app.services.exercise_sync import safe_error_message
 from app.services.supabase import SupabaseService
-from app.services.turso_export import _clear_scope, _select_by_ids, _upsert_rows, export_to_turso
+from app.services.training_analytics import (
+    TrainingAnalyticsService,
+    estimated_one_rep_max,
+    validate_days,
+)
 
 
 def make_settings(**overrides: object) -> Settings:
     values = {
         "supabase_url": "https://example.supabase.co",
+        "supabase_anon_key": SecretStr("anon-key"),
         "supabase_service_role_key": SecretStr("service-role"),
     }
     values.update(overrides)
     return Settings(**values)
-
-
-def test_remote_turso_requires_auth_token() -> None:
-    settings = make_settings(turso_database_url="libsql://example.turso.io")
-
-    assert settings.is_remote_turso_database
-    assert not settings.has_turso_credentials
-
-
-def test_local_turso_file_does_not_require_auth_token() -> None:
-    settings = make_settings(turso_database_url="local.db")
-
-    assert not settings.is_remote_turso_database
-    assert settings.has_turso_credentials
 
 
 @pytest.mark.asyncio
@@ -87,23 +81,32 @@ def test_exercisedb_provider_uses_credentials_when_available() -> None:
 
 
 class FakeResponse:
-    def __init__(self, payload: list[dict[str, object]]) -> None:
+    def __init__(self, payload: object, status_code: int = 200) -> None:
         self.payload = payload
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
         return None
 
-    def json(self) -> list[dict[str, object]]:
+    def json(self) -> object:
         return self.payload
 
 
 class FakeAsyncClient:
     requests: list[dict[str, object]] = []
     pages: list[list[dict[str, object]]] = []
+    auth_payload: dict[str, object] = {"id": "user-1", "email": "user@example.com"}
+    auth_status_code = 200
     closed = False
 
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
+
+    async def __aenter__(self) -> "FakeAsyncClient":
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        type(self).closed = True
 
     async def get(
         self,
@@ -113,6 +116,8 @@ class FakeAsyncClient:
         params: dict[str, str] | None = None,
     ) -> FakeResponse:
         self.requests.append({"url": url, "headers": headers or {}, "params": params or {}})
+        if url.endswith("/auth/v1/user"):
+            return FakeResponse(self.auth_payload, self.auth_status_code)
         return FakeResponse(self.pages.pop(0))
 
     async def post(self, *args: object, **kwargs: object) -> FakeResponse:
@@ -126,7 +131,7 @@ class FakeAsyncClient:
 
 
 @pytest.mark.asyncio
-async def test_supabase_select_all_uses_range_headers_and_in_filters(
+async def test_supabase_select_all_uses_range_headers_order_limit_and_in_filters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     FakeAsyncClient.requests = []
@@ -143,12 +148,14 @@ async def test_supabase_select_all_uses_range_headers_and_in_filters(
             "id,exercise_id",
             page_size=2,
             in_filters={"exercise_id": ["ex-1", "ex-2"]},
+            order="created_at.desc",
         )
 
     assert rows == [{"id": "a"}, {"id": "b"}, {"id": "c"}]
     assert FakeAsyncClient.requests[0]["headers"] == {"Range-Unit": "items", "Range": "0-1"}
     assert FakeAsyncClient.requests[1]["headers"] == {"Range-Unit": "items", "Range": "2-3"}
     assert FakeAsyncClient.requests[0]["params"]["exercise_id"] == "in.(ex-1,ex-2)"
+    assert FakeAsyncClient.requests[0]["params"]["order"] == "created_at.desc"
     assert FakeAsyncClient.closed
 
 
@@ -169,13 +176,15 @@ async def test_supabase_empty_in_filter_short_circuits(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_supabase_select_validates_ranges(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_supabase_select_validates_ranges_and_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(supabase_module.httpx, "AsyncClient", FakeAsyncClient)
     service = SupabaseService(make_settings())
 
     try:
         with pytest.raises(ValueError, match="range_start and range_end"):
             await service.select("exercise_aliases", range_start=0)
+        with pytest.raises(ValueError, match="limit"):
+            await service.select("exercise_aliases", limit=0)
     finally:
         await service.aclose()
 
@@ -196,38 +205,146 @@ def test_supabase_in_filter_quotes_special_values() -> None:
     assert SupabaseService.in_filter(["plain", "needs,quotes", "has(paren)"]) == 'in.(plain,"needs,quotes","has(paren)")'
 
 
-class FakeConnection:
-    def __init__(self) -> None:
-        self.statements: list[tuple[str, list[object]]] = []
-        self.committed = False
-        self.closed = False
+def test_extract_bearer_token_rejects_missing_or_empty_tokens() -> None:
+    with pytest.raises(HTTPException) as missing:
+        extract_bearer_token(None)
+    with pytest.raises(HTTPException) as empty:
+        extract_bearer_token("Bearer ")
 
-    def execute(self, sql: str, values: list[object] | None = None) -> None:
-        self.statements.append((sql, values or []))
-
-    def commit(self) -> None:
-        self.committed = True
-
-    def close(self) -> None:
-        self.closed = True
+    assert missing.value.status_code == 401
+    assert empty.value.status_code == 401
 
 
-def test_turso_upsert_rows_rejects_unknown_table() -> None:
-    with pytest.raises(ValueError, match="Unsupported Turso export table"):
-        _upsert_rows(FakeConnection(), "bad_table", [{"id": "1"}])
+def test_extract_bearer_token_returns_token() -> None:
+    assert extract_bearer_token("Bearer token-1") == "token-1"
+    assert extract_bearer_token("bearer token-2") == "token-2"
 
 
-def test_turso_upsert_rows_rejects_unknown_columns() -> None:
-    with pytest.raises(ValueError, match="Unsupported columns"):
-        _upsert_rows(FakeConnection(), "mcp_exercises", [{"id": "1", "drop table": "x"}])
+def test_settings_preserves_legacy_frontend_origin() -> None:
+    settings = make_settings(frontend_url="https://new.example", frontend_origin="https://old.example")
+
+    assert settings.allowed_frontend_origins == [
+        "http://localhost:5173",
+        "https://new.example",
+        "https://old.example",
+    ]
 
 
-def test_turso_upsert_rows_converts_booleans() -> None:
-    conn = FakeConnection()
+@pytest.mark.asyncio
+async def test_verify_supabase_token_calls_auth_user_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.auth_payload = {"id": "user-1", "email": "user@example.com"}
+    FakeAsyncClient.auth_status_code = 200
+    monkeypatch.setattr(auth_dependencies.httpx, "AsyncClient", FakeAsyncClient)
 
-    _upsert_rows(conn, "mcp_exercises", [{"id": "1", "is_active": True, "is_custom": False}])
+    user = await verify_supabase_token("access-token", make_settings())
 
-    assert conn.statements[0][1] == ["1", 1, 0]
+    assert user.id == "user-1"
+    assert FakeAsyncClient.requests[0]["url"] == "https://example.supabase.co/auth/v1/user"
+    assert FakeAsyncClient.requests[0]["headers"]["apikey"] == "anon-key"
+    assert FakeAsyncClient.requests[0]["headers"]["authorization"] == "Bearer access-token"
+
+
+@pytest.mark.asyncio
+async def test_verify_supabase_token_rejects_invalid_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.auth_payload = {"message": "invalid"}
+    FakeAsyncClient.auth_status_code = 401
+    monkeypatch.setattr(auth_dependencies.httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_supabase_token("bad-token", make_settings())
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_verify_supabase_token_rejects_missing_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.auth_payload = {"email": "user@example.com"}
+    FakeAsyncClient.auth_status_code = 200
+    monkeypatch.setattr(auth_dependencies.httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_supabase_token("bad-token", make_settings())
+
+    assert exc_info.value.status_code == 401
+
+
+class FakeSupabaseService:
+    instances: list["FakeSupabaseService"] = []
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.calls: list[dict[str, object]] = []
+        self.instances.append(self)
+
+    async def __aenter__(self) -> "FakeSupabaseService":
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        return None
+
+    async def select(
+        self,
+        table: str,
+        select: str = "*",
+        **kwargs: object,
+    ) -> list[dict[str, object]]:
+        self.calls.append({"method": "select", "table": table, "select": select, "kwargs": kwargs})
+        return [{"id": "workout-1", "user_id": "user-1"}]
+
+    async def select_all(
+        self,
+        table: str,
+        select: str = "*",
+        **kwargs: object,
+    ) -> list[dict[str, object]]:
+        self.calls.append({"method": "select_all", "table": table, "select": select, "kwargs": kwargs})
+        return []
+
+
+@pytest.mark.asyncio
+async def test_training_repository_scopes_workout_reads_to_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeSupabaseService.instances = []
+    monkeypatch.setattr(training_repository_module, "SupabaseService", FakeSupabaseService)
+
+    async with TrainingRepository(make_settings()) as repository:
+        await repository.get_workout("user-1", "workout-1")
+
+    call = FakeSupabaseService.instances[0].calls[0]
+    assert call["table"] == "workouts"
+    assert call["kwargs"]["user_id"] == "eq.user-1"
+    assert call["kwargs"]["id"] == "eq.workout-1"
+
+
+@pytest.mark.asyncio
+async def test_training_repository_scopes_visible_exercises_to_global_or_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeSupabaseService.instances = []
+    monkeypatch.setattr(training_repository_module, "SupabaseService", FakeSupabaseService)
+
+    async with TrainingRepository(make_settings()) as repository:
+        await repository.get_visible_exercises("user-1", exercise_ids=["exercise-1"])
+
+    call = FakeSupabaseService.instances[0].calls[0]
+    assert call["table"] == "exercises"
+    assert call["kwargs"]["is_active"] == "eq.true"
+    assert call["kwargs"]["or"] == "(user_id.is.null,user_id.eq.user-1)"
+    assert call["kwargs"]["in_filters"] == {"id": ["exercise-1"]}
+
+
+def test_estimated_one_rep_max_excludes_high_rep_sets() -> None:
+    assert estimated_one_rep_max(100, 5) == 116.67
+    assert estimated_one_rep_max(100, 16) is None
+
+
+def test_validate_days_rejects_out_of_range_values() -> None:
+    with pytest.raises(ValueError, match="days"):
+        validate_days(0)
+    with pytest.raises(ValueError, match="days"):
+        validate_days(3651)
 
 
 def test_safe_error_message_is_bounded_and_has_fallback() -> None:
@@ -235,104 +352,58 @@ def test_safe_error_message_is_bounded_and_has_fallback() -> None:
     assert len(safe_error_message(RuntimeError("x" * 600))) == 500
 
 
-def test_clear_scope_limits_user_export_cleanup() -> None:
-    conn = FakeConnection()
-
-    _clear_scope(conn, "user-1")
-
-    statements = [statement for statement, _values in conn.statements]
-    values = [values for _statement, values in conn.statements]
-    assert any("delete from mcp_workouts where user_id = ?" in statement for statement in statements)
-    assert any("delete from mcp_exercises where is_custom = 1 and user_id = ?" in statement for statement in statements)
-    assert ["user-1"] in values
-
-
-def test_clear_scope_global_cleanup_preserves_global_exercises() -> None:
-    conn = FakeConnection()
-
-    _clear_scope(conn, "")
-
-    statements = [statement for statement, _values in conn.statements]
-    assert "delete from mcp_exercises" not in statements
-    assert "delete from mcp_exercises where is_custom = 1" in statements
-
-
-class FakeExportSupabaseService:
-    instances: list["FakeExportSupabaseService"] = []
-
+class FakeTrainingRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.calls: list[dict[str, object]] = []
-        self.closed = False
-        self.instances.append(self)
 
-    async def __aenter__(self) -> "FakeExportSupabaseService":
+    async def __aenter__(self) -> "FakeTrainingRepository":
         return self
 
     async def __aexit__(self, *_exc_info: object) -> None:
-        self.closed = True
+        return None
 
-    async def select_all(
-        self,
-        table: str,
-        select: str = "*",
-        *,
-        in_filters: dict[str, list[str]] | None = None,
-        **filters: str,
-    ) -> list[dict[str, object]]:
-        self.calls.append({"table": table, "select": select, "in_filters": in_filters, "filters": filters})
-        if table == "exercises" and filters.get("is_custom") == "eq.false":
-            return [{"id": "global-exercise", "is_custom": False, "is_active": True}]
-        if table == "exercises" and filters.get("user_id") == "eq.user-1":
-            return [{"id": "custom-exercise", "is_custom": True, "is_active": True, "user_id": "user-1"}]
-        if table == "exercise_aliases":
-            return [{"id": "alias-1", "exercise_id": "global-exercise"}]
-        if table == "workouts":
-            return [{"id": "workout-1", "user_id": "user-1"}]
-        if table == "workout_exercises":
-            return [{"id": "workout-exercise-1", "workout_id": "workout-1"}]
-        if table == "workout_sets":
-            return [{"id": "set-1", "workout_exercise_id": "workout-exercise-1"}]
-        if table == "routines":
-            return [{"id": "routine-1", "user_id": "user-1"}]
-        if table == "routine_exercises":
-            return [{"id": "routine-exercise-1", "routine_id": "routine-1"}]
-        return []
+    async def find_exercise_by_name(self, user_id: str, exercise_name: str) -> dict[str, object]:
+        assert user_id == "user-1"
+        assert exercise_name == "Bench Press"
+        return {
+            "id": "exercise-1",
+            "name": "Bench Press",
+            "equipment": "barbell",
+            "primary_muscle": "chest",
+        }
 
+    async def get_recent_workouts(self, user_id: str, days: int) -> list[dict[str, object]]:
+        assert user_id == "user-1"
+        assert days == 90
+        return [
+            {"id": "workout-1", "started_at": "2026-06-01T12:00:00+00:00"},
+            {"id": "workout-2", "started_at": "2026-06-08T12:00:00+00:00"},
+        ]
 
-@pytest.mark.asyncio
-async def test_select_by_ids_chunks_large_parent_lists() -> None:
-    service = FakeExportSupabaseService(make_settings())
-    ids = [f"id-{index}" for index in range(205)]
+    async def get_workout_exercises_by_workouts(self, workout_ids: list[str]) -> list[dict[str, object]]:
+        assert workout_ids == ["workout-1", "workout-2"]
+        return [
+            {"id": "we-1", "workout_id": "workout-1", "exercise_id": "exercise-1"},
+            {"id": "we-2", "workout_id": "workout-2", "exercise_id": "exercise-1"},
+        ]
 
-    await _select_by_ids(service, "exercise_aliases", "id,exercise_id", "exercise_id", ids)
-
-    filters = [call["in_filters"] for call in service.calls]
-    assert filters == [
-        {"exercise_id": ids[:100]},
-        {"exercise_id": ids[100:200]},
-        {"exercise_id": ids[200:]},
-    ]
+    async def get_sets_by_workout_exercises(self, ids: list[str]) -> list[dict[str, object]]:
+        assert ids == ["we-1", "we-2"]
+        return [
+            {"id": "set-1", "workout_exercise_id": "we-1", "weight": 100, "reps": 5, "is_completed": True},
+            {"id": "set-2", "workout_exercise_id": "we-2", "weight": 110, "reps": 5, "is_completed": True},
+        ]
 
 
 @pytest.mark.asyncio
-async def test_turso_export_pushes_child_filters_to_supabase(monkeypatch: pytest.MonkeyPatch) -> None:
-    conn = FakeConnection()
-    FakeExportSupabaseService.instances = []
-    monkeypatch.setattr(turso_export_module, "SupabaseService", FakeExportSupabaseService)
-    monkeypatch.setattr(turso_export_module.libsql, "connect", lambda **_kwargs: conn)
+async def test_strength_progress_returns_structured_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.training_analytics.TrainingRepository", FakeTrainingRepository)
 
-    result = await export_to_turso(
-        make_settings(turso_database_url="local.db", turso_export_user_id="user-1")
+    result = await TrainingAnalyticsService(make_settings()).get_strength_progress(
+        "user-1",
+        "Bench Press",
     )
 
-    service = FakeExportSupabaseService.instances[0]
-    child_calls = {call["table"]: call["in_filters"] for call in service.calls if call["in_filters"]}
-    assert child_calls["exercise_aliases"] == {"exercise_id": ["global-exercise", "custom-exercise"]}
-    assert child_calls["workout_exercises"] == {"workout_id": ["workout-1"]}
-    assert child_calls["workout_sets"] == {"workout_exercise_id": ["workout-exercise-1"]}
-    assert child_calls["routine_exercises"] == {"routine_id": ["routine-1"]}
-    assert result["workout_sets"] == 1
-    assert conn.committed
-    assert conn.closed
-    assert service.closed
+    assert result["exercise"]["name"] == "Bench Press"
+    assert result["performances"][0]["best_set"]["estimated_1rm"] == 116.67
+    assert result["summary"]["classification"] == "progressing"
