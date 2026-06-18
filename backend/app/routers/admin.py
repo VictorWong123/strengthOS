@@ -1,5 +1,7 @@
 """Admin-only management endpoints for sync jobs."""
 
+import secrets
+
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.config import get_settings
@@ -14,7 +16,8 @@ async def require_admin_key(x_admin_key: str | None = Header(default=None)) -> N
 
     settings = get_settings()
     expected = settings.admin_api_key.get_secret_value()
-    if not expected or x_admin_key != expected:
+    provided = x_admin_key or ""
+    if not expected or not secrets.compare_digest(provided, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key.")
 
 

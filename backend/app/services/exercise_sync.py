@@ -59,65 +59,81 @@ async def sync_catalog(settings: Settings) -> ExerciseSyncResult:
     """
 
     provider = get_exercise_provider(settings)
-    supabase = SupabaseService(settings)
-    sync_run = await supabase.insert(
-        "exercise_sync_runs",
-        {"provider": provider.source, "status": "running"},
-    )
-    sync_run_id = sync_run["id"]
-    fetched_count = 0
-    upserted_count = 0
-    failed_count = 0
+    async with SupabaseService(settings) as supabase:
+        sync_run = await supabase.insert(
+            "exercise_sync_runs",
+            {"provider": provider.source, "status": "running"},
+        )
+        sync_run_id = sync_run["id"]
+        fetched_count = 0
+        upserted_count = 0
+        failed_count = 0
 
-    try:
-        exercises = await provider.list_exercises()
-        fetched_count = len(exercises)
-    except Exception as exc:
-        failed_count = 1
-        await _log_failure(supabase, sync_run_id, None, None, exc)
-        await _finish_run(supabase, sync_run_id, "failed", fetched_count, upserted_count, failed_count, str(exc))
-        raise
-
-    for exercise in exercises:
         try:
-            rows = await supabase.upsert("exercises", exercise_to_row(exercise, provider.source), "source,external_id")
-            if not rows:
-                raise RuntimeError("Supabase returned no exercise row after upsert.")
-            upserted_count += 1
-            alias_rows = [
-                {
-                    "exercise_id": rows[0]["id"],
-                    "alias": alias,
-                    "normalized_alias": normalize_text(alias),
-                }
-                for alias in aliases_for_name(exercise.name)
-            ]
-            if alias_rows:
-                await supabase.upsert("exercise_aliases", alias_rows, "exercise_id,normalized_alias")
+            exercises = await provider.list_exercises()
+            fetched_count = len(exercises)
         except Exception as exc:
-            failed_count += 1
-            await _log_failure(supabase, sync_run_id, exercise.external_id, exercise_to_row(exercise, provider.source), exc)
+            failed_count = 1
+            message = safe_error_message(exc)
+            await _log_failure(supabase, sync_run_id, None, None, exc)
+            await _finish_run(supabase, sync_run_id, "failed", fetched_count, upserted_count, failed_count, message)
+            raise
 
-    for failure in getattr(provider, "failures", []):
-        failed_count += 1
-        await _log_failure(
-            supabase,
-            sync_run_id,
-            failure.get("external_id"),
-            failure.get("payload"),
-            RuntimeError(failure.get("error", "Provider record failed normalization.")),
+        for exercise in exercises:
+            try:
+                rows = await supabase.upsert(
+                    "exercises", exercise_to_row(exercise, provider.source), "source,external_id"
+                )
+                if not rows:
+                    raise RuntimeError("Supabase returned no exercise row after upsert.")
+                upserted_count += 1
+                alias_rows = [
+                    {
+                        "exercise_id": rows[0]["id"],
+                        "alias": alias,
+                        "normalized_alias": normalize_text(alias),
+                    }
+                    for alias in aliases_for_name(exercise.name)
+                ]
+                if alias_rows:
+                    await supabase.upsert("exercise_aliases", alias_rows, "exercise_id,normalized_alias")
+            except Exception as exc:
+                failed_count += 1
+                await _log_failure(
+                    supabase,
+                    sync_run_id,
+                    exercise.external_id,
+                    exercise_to_row(exercise, provider.source),
+                    exc,
+                )
+
+        for failure in getattr(provider, "failures", []):
+            failed_count += 1
+            await _log_failure(
+                supabase,
+                sync_run_id,
+                failure.get("external_id"),
+                failure.get("payload"),
+                RuntimeError(failure.get("error", "Provider record failed normalization.")),
+            )
+
+        status = "completed_with_errors" if failed_count else "completed"
+        await _finish_run(supabase, sync_run_id, status, fetched_count, upserted_count, failed_count)
+        return ExerciseSyncResult(
+            provider=provider.source,
+            sync_run_id=sync_run_id,
+            fetched_count=fetched_count,
+            upserted_count=upserted_count,
+            failed_count=failed_count,
+            status=status,
         )
 
-    status = "completed_with_errors" if failed_count else "completed"
-    await _finish_run(supabase, sync_run_id, status, fetched_count, upserted_count, failed_count)
-    return ExerciseSyncResult(
-        provider=provider.source,
-        sync_run_id=sync_run_id,
-        fetched_count=fetched_count,
-        upserted_count=upserted_count,
-        failed_count=failed_count,
-        status=status,
-    )
+
+def safe_error_message(exc: Exception) -> str:
+    """Return a bounded exception summary suitable for persistent sync logs."""
+
+    message = str(exc).strip() or exc.__class__.__name__
+    return message[:500]
 
 
 async def _log_failure(
@@ -135,7 +151,7 @@ async def _log_failure(
             "sync_run_id": sync_run_id,
             "external_id": external_id,
             "payload": payload,
-            "error_message": str(exc),
+            "error_message": safe_error_message(exc),
         },
     )
 

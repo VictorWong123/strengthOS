@@ -9,19 +9,56 @@ import { Button, Card, GhostButton } from './components/ui'
 import { supabase } from './lib/supabase'
 import type { Exercise, Routine, Workout, WorkoutExercise, WorkoutSet } from './lib/types'
 
+const EXERCISE_COLUMNS =
+  'id, external_id, source, user_id, name, normalized_name, primary_muscle, secondary_muscles, body_part, equipment, movement_category, instructions, image_url, animation_url, thumbnail_url, is_custom, is_active'
+const WORKOUT_COLUMNS = 'id, user_id, name, started_at, completed_at, notes'
+const WORKOUT_EXERCISE_COLUMNS = 'id, workout_id, exercise_id, exercise_order'
+const WORKOUT_SET_COLUMNS = 'id, workout_exercise_id, set_order, reps, weight, is_completed, notes, completed_at'
+const ROUTINE_COLUMNS = 'id, user_id, name, notes'
+
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [exercises, setExercises] = useState<Exercise[]>([])
   const [workouts, setWorkouts] = useState<Workout[]>([])
   const [workoutExercises, setWorkoutExercises] = useState<WorkoutExercise[]>([])
   const [sets, setSets] = useState<WorkoutSet[]>([])
+  const [selectedExerciseSets, setSelectedExerciseSets] = useState<WorkoutSet[]>([])
   const [routines, setRoutines] = useState<Routine[]>([])
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null)
   const [status, setStatus] = useState('')
 
-  const activeWorkout = workouts.find((workout) => !workout.completed_at) ?? null
+  const activeWorkout = useMemo(() => workouts.find((workout) => !workout.completed_at) ?? null, [workouts])
   const exerciseById = useMemo(() => new Map(exercises.map((exercise) => [exercise.id, exercise])), [exercises])
-
+  const workoutExerciseById = useMemo(
+    () => new Map(workoutExercises.map((item) => [item.id, item])),
+    [workoutExercises],
+  )
+  const workoutExercisesByWorkoutId = useMemo(() => {
+    const grouped = new Map<string, WorkoutExercise[]>()
+    for (const item of workoutExercises) {
+      const items = grouped.get(item.workout_id) ?? []
+      items.push(item)
+      grouped.set(item.workout_id, items)
+    }
+    return grouped
+  }, [workoutExercises])
+  const setsByWorkoutExerciseId = useMemo(() => {
+    const grouped = new Map<string, WorkoutSet[]>()
+    for (const set of sets) {
+      const itemSets = grouped.get(set.workout_exercise_id) ?? []
+      itemSets.push(set)
+      grouped.set(set.workout_exercise_id, itemSets)
+    }
+    return grouped
+  }, [sets])
+  const activeWorkoutExercises = useMemo(
+    () => (activeWorkout ? workoutExercisesByWorkoutId.get(activeWorkout.id) ?? [] : []),
+    [activeWorkout, workoutExercisesByWorkoutId],
+  )
+  const activeWorkoutSets = useMemo(
+    () => activeWorkoutExercises.flatMap((item) => setsByWorkoutExerciseId.get(item.id) ?? []),
+    [activeWorkoutExercises, setsByWorkoutExerciseId],
+  )
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
@@ -35,6 +72,14 @@ export function App() {
     void loadData()
   }, [session])
 
+  useEffect(() => {
+    if (!selectedExercise) {
+      setSelectedExerciseSets([])
+      return
+    }
+    void loadExerciseHistory(selectedExercise.id)
+  }, [selectedExercise])
+
   async function loadData() {
     setStatus('Loading data...')
     const [
@@ -42,9 +87,9 @@ export function App() {
       { data: workoutRows, error: workoutError },
       { data: routineRows, error: routineError },
     ] = await Promise.all([
-        supabase.from('exercises').select('*').eq('is_active', true).order('name'),
-        supabase.from('workouts').select('*').order('started_at', { ascending: false }).limit(10),
-        supabase.from('routines').select('*').order('created_at', { ascending: false }),
+        supabase.from('exercises').select(EXERCISE_COLUMNS).eq('is_active', true).order('name'),
+        supabase.from('workouts').select(WORKOUT_COLUMNS).order('started_at', { ascending: false }).limit(10),
+        supabase.from('routines').select(ROUTINE_COLUMNS).order('created_at', { ascending: false }),
       ])
     const loadError = exerciseError ?? workoutError ?? routineError
     if (loadError) {
@@ -52,99 +97,172 @@ export function App() {
       return
     }
     setExercises((exerciseRows ?? []) as Exercise[])
-    setWorkouts((workoutRows ?? []) as Workout[])
+    const loadedWorkouts = (workoutRows ?? []) as Workout[]
+    setWorkouts(loadedWorkouts)
     setRoutines((routineRows ?? []) as Routine[])
-    const childrenLoaded = await loadWorkoutChildren()
+    const childrenLoaded = await loadWorkoutChildren(loadedWorkouts)
     if (childrenLoaded) setStatus('')
   }
 
-  async function loadWorkoutChildren(): Promise<boolean> {
-    const [{ data: exerciseRows, error: exerciseError }, { data: setRows, error: setError }] = await Promise.all([
-      supabase.from('workout_exercises').select('*').order('exercise_order'),
-      supabase.from('workout_sets').select('*').order('set_order'),
-    ])
-    const loadError = exerciseError ?? setError
-    if (loadError) {
-      setStatus(loadError.message)
+  async function loadWorkoutChildren(loadedWorkouts = workouts): Promise<boolean> {
+    const workoutIds = loadedWorkouts.map((workout) => workout.id)
+    if (!workoutIds.length) {
+      setWorkoutExercises([])
+      setSets([])
+      return true
+    }
+
+    const { data: exerciseRows, error: exerciseError } = await supabase
+      .from('workout_exercises')
+      .select(WORKOUT_EXERCISE_COLUMNS)
+      .in('workout_id', workoutIds)
+      .order('exercise_order')
+
+    if (exerciseError) {
+      setStatus(exerciseError.message)
       return false
     }
-    setWorkoutExercises((exerciseRows ?? []) as WorkoutExercise[])
+
+    const loadedWorkoutExercises = (exerciseRows ?? []) as WorkoutExercise[]
+    setWorkoutExercises(loadedWorkoutExercises)
+
+    const workoutExerciseIds = loadedWorkoutExercises.map((item) => item.id)
+    if (!workoutExerciseIds.length) {
+      setSets([])
+      return true
+    }
+
+    const { data: setRows, error: setError } = await supabase
+      .from('workout_sets')
+      .select(WORKOUT_SET_COLUMNS)
+      .in('workout_exercise_id', workoutExerciseIds)
+      .order('set_order')
+
+    if (setError) {
+      setStatus(setError.message)
+      return false
+    }
+
     setSets((setRows ?? []) as WorkoutSet[])
     return true
   }
 
-  async function createWorkout() {
-    if (!session) return
+  async function loadExerciseHistory(exerciseId: string): Promise<void> {
+    const { data: exerciseRows, error: exerciseError } = await supabase
+      .from('workout_exercises')
+      .select(WORKOUT_EXERCISE_COLUMNS)
+      .eq('exercise_id', exerciseId)
+
+    if (exerciseError) {
+      setStatus(exerciseError.message)
+      return
+    }
+
+    const workoutExerciseIds = ((exerciseRows ?? []) as WorkoutExercise[]).map((item) => item.id)
+    if (!workoutExerciseIds.length) {
+      setSelectedExerciseSets([])
+      return
+    }
+
+    const { data: setRows, error: setError } = await supabase
+      .from('workout_sets')
+      .select(WORKOUT_SET_COLUMNS)
+      .in('workout_exercise_id', workoutExerciseIds)
+      .order('completed_at', { ascending: false })
+
+    if (setError) {
+      setStatus(setError.message)
+      return
+    }
+
+    setSelectedExerciseSets((setRows ?? []) as WorkoutSet[])
+  }
+
+  async function createWorkout(): Promise<Workout | null> {
+    if (!session) return null
     const { data, error } = await supabase
       .from('workouts')
       .insert({ user_id: session.user.id, name: 'Workout' })
-      .select()
+      .select(WORKOUT_COLUMNS)
       .single()
     if (error) {
       setStatus(error.message)
-      return
+      return null
     }
-    setWorkouts([data as Workout, ...workouts])
+    const workout = data as Workout
+    setWorkouts((current) => [workout, ...current])
+    return workout
+  }
+
+  async function ensureActiveWorkout(): Promise<Workout | null> {
+    return activeWorkout ?? createWorkout()
   }
 
   async function addExerciseToWorkout(exercise: Exercise) {
-    let workout = activeWorkout
-    if (!workout) {
-      if (!session) return
-      const { data, error } = await supabase
-        .from('workouts')
-        .insert({ user_id: session.user.id, name: 'Workout' })
-        .select()
-        .single()
-      if (error) {
-        setStatus(error.message)
-        return
-      }
-      workout = data as Workout
-      setWorkouts([workout, ...workouts])
-    }
+    const workout = await ensureActiveWorkout()
+    if (!workout) return
+
     const { data, error } = await supabase
       .from('workout_exercises')
       .insert({
         workout_id: workout.id,
         exercise_id: exercise.id,
-        exercise_order: workoutExercises.filter((item) => item.workout_id === workout.id).length,
+        exercise_order: workoutExercisesByWorkoutId.get(workout.id)?.length ?? 0,
       })
-      .select()
+      .select(WORKOUT_EXERCISE_COLUMNS)
       .single()
     if (error) {
       setStatus(error.message)
       return
     }
-    setWorkoutExercises([...workoutExercises, data as WorkoutExercise])
-    await addSet((data as WorkoutExercise).id)
+    setWorkoutExercises((current) => [...current, data as WorkoutExercise])
+    await addSet((data as WorkoutExercise).id, exercise.id)
   }
 
-  async function addSet(workoutExerciseId: string) {
-    const setOrder = sets.filter((set) => set.workout_exercise_id === workoutExerciseId).length
+  async function addSet(workoutExerciseId: string, exerciseId?: string) {
+    const setOrder = setsByWorkoutExerciseId.get(workoutExerciseId)?.length ?? 0
     const { data, error } = await supabase
       .from('workout_sets')
       .insert({ workout_exercise_id: workoutExerciseId, set_order: setOrder })
-      .select()
+      .select(WORKOUT_SET_COLUMNS)
       .single()
     if (error) {
       setStatus(error.message)
       return
     }
-    setSets([...sets, data as WorkoutSet])
+    const newSet = data as WorkoutSet
+    setSets((current) => [...current, newSet])
+    const linkedExerciseId = exerciseId ?? workoutExerciseById.get(workoutExerciseId)?.exercise_id
+    if (linkedExerciseId === selectedExercise?.id) {
+      setSelectedExerciseSets((current) => [...current, newSet])
+    }
   }
 
   async function updateSet(set: WorkoutSet, patch: Partial<WorkoutSet>) {
     const next = { ...set, ...patch }
-    setSets(sets.map((candidate) => (candidate.id === set.id ? next : candidate)))
+    setSets((current) => current.map((candidate) => (candidate.id === set.id ? next : candidate)))
+    setSelectedExerciseSets((current) => current.map((candidate) => (candidate.id === set.id ? next : candidate)))
     const { error } = await supabase.from('workout_sets').update(patch).eq('id', set.id)
-    if (error) setStatus(error.message)
+    if (error) {
+      setSets((current) => current.map((candidate) => (candidate.id === set.id ? set : candidate)))
+      setSelectedExerciseSets((current) => current.map((candidate) => (candidate.id === set.id ? set : candidate)))
+      setStatus(error.message)
+    }
   }
 
   async function deleteSet(set: WorkoutSet) {
-    setSets(sets.filter((candidate) => candidate.id !== set.id))
+    setSets((current) => current.filter((candidate) => candidate.id !== set.id))
+    setSelectedExerciseSets((current) => current.filter((candidate) => candidate.id !== set.id))
     const { error } = await supabase.from('workout_sets').delete().eq('id', set.id)
-    if (error) setStatus(error.message)
+    if (error) {
+      setSets((current) =>
+        current.some((candidate) => candidate.id === set.id) ? current : [...current, set].sort((a, b) => a.set_order - b.set_order),
+      )
+      setSelectedExerciseSets((current) =>
+        current.some((candidate) => candidate.id === set.id) ? current : [...current, set].sort((a, b) => a.set_order - b.set_order),
+      )
+      setStatus(error.message)
+    }
   }
 
   async function addToRoutine(exercise: Exercise) {
@@ -154,7 +272,7 @@ export function App() {
       const { data, error } = await supabase
         .from('routines')
         .insert({ user_id: session.user.id, name: 'Default routine' })
-        .select()
+        .select(ROUTINE_COLUMNS)
         .single()
       if (error) {
         setStatus(error.message)
@@ -173,20 +291,13 @@ export function App() {
 
   if (!session) return <AuthView />
 
-  const selectedExerciseSets = selectedExercise
-    ? sets.filter((set) => {
-        const item = workoutExercises.find((candidate) => candidate.id === set.workout_exercise_id)
-        return item?.exercise_id === selectedExercise.id
-      })
-    : []
-
   return (
     <main className="mx-auto grid min-h-screen max-w-7xl gap-4 px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:grid-cols-[1.1fr_0.9fr]">
       <header className="md:col-span-2">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">strengthOS</h1>
-            <p className="text-sm text-gray-400">Supabase-backed workout tracking with a Turso MCP path.</p>
+            <p className="text-sm text-gray-400">Supabase-backed workout tracking for focused training logs.</p>
           </div>
           <GhostButton onClick={() => supabase.auth.signOut()} aria-label="Sign out">
             <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />
@@ -198,8 +309,8 @@ export function App() {
       <section className="space-y-4">
         <WorkoutLogger
           workout={activeWorkout}
-          workoutExercises={workoutExercises.filter((item) => item.workout_id === activeWorkout?.id)}
-          sets={sets}
+          workoutExercises={activeWorkoutExercises}
+          sets={activeWorkoutSets}
           exerciseById={exerciseById}
           onCreateWorkout={createWorkout}
           onAddSet={addSet}

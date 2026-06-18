@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     supabase_url: str = ""
     supabase_service_role_key: SecretStr = SecretStr("")
-    exercise_api_provider: str = "exercisedb"
+    exercise_api_provider: str = "seed"
     exercise_api_key: SecretStr = SecretStr("")
     exercise_api_host: str = "exercisedb.p.rapidapi.com"
     exercise_api_base_url: str = "https://exercisedb.p.rapidapi.com"
@@ -40,9 +40,24 @@ class Settings(BaseSettings):
 
     @property
     def has_turso_credentials(self) -> bool:
-        """Return whether the Turso export target is configured."""
+        """Return whether the Turso/libSQL export target is fully configured.
 
-        return bool(self.turso_database_url)
+        Local libSQL database paths do not require an auth token. Remote Turso
+        URLs do require one, and missing remote auth should fail before export
+        work begins.
+        """
+
+        if not self.turso_database_url:
+            return False
+        if self.is_remote_turso_database:
+            return bool(self.turso_auth_token.get_secret_value())
+        return True
+
+    @property
+    def is_remote_turso_database(self) -> bool:
+        """Return whether the configured libSQL database points at remote Turso."""
+
+        return self.turso_database_url.startswith(("libsql://", "http://", "https://"))
 
     @property
     def has_admin_api_key(self) -> bool:

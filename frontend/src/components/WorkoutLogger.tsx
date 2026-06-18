@@ -1,5 +1,5 @@
 import { Check, Plus, Trash2 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 import { Button, Card, GhostButton, Input } from './ui'
 
@@ -68,45 +68,12 @@ export function WorkoutLogger({
               </div>
               <div className="mt-3 space-y-2">
                 {itemSets.map((set) => (
-                  <div
+                  <SetRow
                     key={set.id}
-                    className={`grid grid-cols-[2.5rem_1fr_1fr_2.75rem_2.75rem] gap-2 rounded-lg p-2 ${
-                      set.is_completed ? 'bg-green-500/15 ring-1 ring-green-400/30' : 'bg-surface-card'
-                    }`}
-                  >
-                    <div className="flex items-center justify-center text-sm text-gray-400">{set.set_order + 1}</div>
-                    <Input
-                      inputMode="decimal"
-                      value={set.weight ?? ''}
-                      placeholder="lb"
-                      onChange={(event) => onUpdateSet(set, { weight: Number(event.target.value) || null })}
-                    />
-                    <Input
-                      inputMode="numeric"
-                      value={set.reps ?? ''}
-                      placeholder="reps"
-                      onChange={(event) => onUpdateSet(set, { reps: Number(event.target.value) || null })}
-                    />
-                    <button
-                      className="touch-target rounded-lg bg-surface-elevated text-green-300"
-                      onClick={() =>
-                        onUpdateSet(set, {
-                          is_completed: !set.is_completed,
-                          completed_at: !set.is_completed ? new Date().toISOString() : null,
-                        })
-                      }
-                      aria-label="Toggle completed"
-                    >
-                      <Check className="mx-auto h-5 w-5" aria-hidden="true" />
-                    </button>
-                    <button
-                      className="touch-target rounded-lg bg-surface-elevated text-gray-300"
-                      onClick={() => onDeleteSet(set)}
-                      aria-label="Delete set"
-                    >
-                      <Trash2 className="mx-auto h-5 w-5" aria-hidden="true" />
-                    </button>
-                  </div>
+                    set={set}
+                    onUpdateSet={onUpdateSet}
+                    onDeleteSet={onDeleteSet}
+                  />
                 ))}
               </div>
             </section>
@@ -115,4 +82,96 @@ export function WorkoutLogger({
       </div>
     </Card>
   )
+}
+
+function SetRow({
+  set,
+  onUpdateSet,
+  onDeleteSet,
+}: {
+  set: WorkoutSet
+  onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
+  onDeleteSet: (set: WorkoutSet) => void
+}) {
+  const [weightDraft, setWeightDraft] = useState(formatSetValue(set.weight))
+  const [repsDraft, setRepsDraft] = useState(formatSetValue(set.reps))
+
+  useEffect(() => {
+    setWeightDraft(formatSetValue(set.weight))
+    setRepsDraft(formatSetValue(set.reps))
+  }, [set.weight, set.reps])
+
+  function commitNumber(field: 'weight' | 'reps', draft: string) {
+    const currentValue = field === 'weight' ? set.weight : set.reps
+    const currentDraft = formatSetValue(currentValue)
+    const trimmed = draft.trim()
+
+    if (trimmed === currentDraft) return
+    if (!trimmed) {
+      onUpdateSet(set, { [field]: null })
+      return
+    }
+
+    const nextValue = Number(trimmed)
+    if (!Number.isFinite(nextValue)) {
+      if (field === 'weight') setWeightDraft(currentDraft)
+      else setRepsDraft(currentDraft)
+      return
+    }
+
+    onUpdateSet(set, { [field]: nextValue })
+  }
+
+  return (
+    <div
+      className={`grid grid-cols-[2.5rem_1fr_1fr_2.75rem_2.75rem] gap-2 rounded-lg p-2 ${
+        set.is_completed ? 'bg-green-500/15 ring-1 ring-green-400/30' : 'bg-surface-card'
+      }`}
+    >
+      <div className="flex items-center justify-center text-sm text-gray-400">{set.set_order + 1}</div>
+      <Input
+        inputMode="decimal"
+        value={weightDraft}
+        placeholder="lb"
+        onChange={(event) => setWeightDraft(event.target.value)}
+        onBlur={() => commitNumber('weight', weightDraft)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+      />
+      <Input
+        inputMode="numeric"
+        value={repsDraft}
+        placeholder="reps"
+        onChange={(event) => setRepsDraft(event.target.value)}
+        onBlur={() => commitNumber('reps', repsDraft)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+      />
+      <button
+        className="touch-target rounded-lg bg-surface-elevated text-green-300"
+        onClick={() =>
+          onUpdateSet(set, {
+            is_completed: !set.is_completed,
+            completed_at: !set.is_completed ? new Date().toISOString() : null,
+          })
+        }
+        aria-label="Toggle completed"
+      >
+        <Check className="mx-auto h-5 w-5" aria-hidden="true" />
+      </button>
+      <button
+        className="touch-target rounded-lg bg-surface-elevated text-gray-300"
+        onClick={() => onDeleteSet(set)}
+        aria-label="Delete set"
+      >
+        <Trash2 className="mx-auto h-5 w-5" aria-hidden="true" />
+      </button>
+    </div>
+  )
+}
+
+function formatSetValue(value: number | null): string {
+  return value === null ? '' : String(value)
 }

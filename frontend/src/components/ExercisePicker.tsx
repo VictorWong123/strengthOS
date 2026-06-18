@@ -10,21 +10,32 @@ type Props = {
   onOpenDetails: (exercise: Exercise) => void
 }
 
+type SearchableExercise = {
+  exercise: Exercise
+  searchText: string
+}
+
 export function ExercisePicker({ exercises, onSelect, onOpenDetails }: Props) {
   const [query, setQuery] = useState('')
-  const terms = expandSearch(query)
+  const terms = useMemo(() => expandSearch(query), [query])
+  const searchableExercises = useMemo<SearchableExercise[]>(
+    () =>
+      exercises.map((exercise) => ({
+        exercise,
+        searchText: normalizeSearch(
+          [exercise.name, exercise.primary_muscle, exercise.body_part, exercise.equipment].filter(Boolean).join(' '),
+        ),
+      })),
+    [exercises],
+  )
 
   const filtered = useMemo(() => {
     if (!query.trim()) return exercises.slice(0, 30)
-    return exercises
-      .filter((exercise) => {
-        const haystack = normalizeSearch(
-          [exercise.name, exercise.primary_muscle, exercise.body_part, exercise.equipment].filter(Boolean).join(' '),
-        )
-        return terms.some((term) => haystack.includes(term))
-      })
+    return searchableExercises
+      .filter(({ searchText }) => terms.some((term) => searchText.includes(term)))
+      .map(({ exercise }) => exercise)
       .slice(0, 50)
-  }, [exercises, query, terms])
+  }, [exercises, query, searchableExercises, terms])
 
   return (
     <Card className="space-y-4">

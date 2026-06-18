@@ -25,7 +25,7 @@ Backend `.env`:
 ```text
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
-EXERCISE_API_PROVIDER=exercisedb
+EXERCISE_API_PROVIDER=seed
 EXERCISE_API_KEY=
 EXERCISE_API_HOST=exercisedb.p.rapidapi.com
 EXERCISE_API_BASE_URL=https://exercisedb.p.rapidapi.com
@@ -77,14 +77,14 @@ run sync/export jobs.
 
 ## Exercise Catalog Sync
 
-Import ExerciseDB into Supabase:
+Import the configured exercise provider into Supabase:
 
 ```bash
 cd backend
 python -m app.scripts.sync_exercises
 ```
 
-If ExerciseDB credentials are missing, the sync uses a small local seed catalog so the app remains usable. The sync upserts by `(source, external_id)`, records sync runs, logs failed records, and preserves existing workout relationships.
+Use `EXERCISE_API_PROVIDER=seed` for the bundled local catalog. Use `EXERCISE_API_PROVIDER=exercisedb` only when `EXERCISE_API_KEY` and `EXERCISE_API_HOST` are configured; missing ExerciseDB credentials fail loudly so production syncs do not accidentally import seed data. The sync upserts by `(source, external_id)`, records sync runs, logs failed records, and preserves existing workout relationships.
 
 ExerciseDB media is not copied into this repository. strengthOS stores provider metadata and remote media URLs only. Verify the RapidAPI/ExerciseDB plan terms for attribution, allowed media use, and rate limits before production use.
 
