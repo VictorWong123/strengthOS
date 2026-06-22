@@ -1,0 +1,590 @@
+{
+  "project": {
+    "name": "StrengthOS",
+    "scope": "frontend UI redesign only",
+    "primary_device": "iPhone",
+    "secondary_device": "desktop browser",
+    "goal": "Create a polished, fast, mobile-first workout tracking interface using the existing backend, Supabase integration, routes, services, and data models."
+  },
+  "design_direction": {
+    "description": "A clean dark workout interface inspired by modern fitness applications, without copying Hevy branding, assets, or exact layouts.",
+    "principles": [
+      "Mobile first",
+      "Fast to use during a workout",
+      "Large touch targets",
+      "Strong visual hierarchy",
+      "Minimal clutter",
+      "One-handed usability",
+      "Clear primary actions",
+      "Consistent reusable components"
+    ]
+  },
+  "design_tokens": {
+    "colors": {
+      "background": "#000000",
+      "surface": "#1C1C1E",
+      "surfaceElevated": "#242426",
+      "surfacePressed": "#2C2C2E",
+      "border": "#343438",
+      "textPrimary": "#FFFFFF",
+      "textSecondary": "#98989D",
+      "textMuted": "#636366",
+      "accent": "#0A84FF",
+      "accentPressed": "#0071E3",
+      "success": "#30D158",
+      "successSurface": "rgba(48, 209, 88, 0.14)",
+      "warning": "#FFD60A",
+      "warningSurface": "rgba(255, 214, 10, 0.16)",
+      "danger": "#FF453A",
+      "dangerSurface": "rgba(255, 69, 58, 0.14)",
+      "overlay": "rgba(0, 0, 0, 0.72)"
+    },
+    "typography": {
+      "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif",
+      "screenTitle": "text-4xl font-bold tracking-tight",
+      "sectionTitle": "text-2xl font-semibold tracking-tight",
+      "cardTitle": "text-xl font-semibold",
+      "bodyLarge": "text-lg",
+      "body": "text-base",
+      "secondary": "text-sm text-zinc-400",
+      "caption": "text-xs text-zinc-500"
+    },
+    "spacing": {
+      "screenHorizontalMobile": "16px",
+      "screenHorizontalDesktop": "24px",
+      "screenTop": "16px",
+      "sectionGap": "28px",
+      "cardGap": "14px",
+      "cardPadding": "16px",
+      "controlHeight": "52px",
+      "largeControlHeight": "64px",
+      "bottomNavigationHeight": "76px"
+    },
+    "radius": {
+      "card": "18px",
+      "button": "14px",
+      "input": "12px",
+      "modal": "22px",
+      "pill": "9999px"
+    }
+  },
+  "responsive_behavior": {
+    "mobileFirst": true,
+    "breakpoints": {
+      "smallPhone": "320px",
+      "standardPhone": "375px",
+      "largePhone": "430px",
+      "tablet": "768px",
+      "desktop": "1024px"
+    },
+    "mobile": {
+      "layout": "single column",
+      "contentWidth": "100%",
+      "bottomNavigation": "fixed",
+      "safeAreaInsets": true,
+      "stickyPrimaryActions": true
+    },
+    "desktop": {
+      "layout": "centered single-column application",
+      "maxContentWidth": "760px",
+      "preserveMobileHierarchy": true,
+      "avoidWideDashboard": true,
+      "bottomNavigation": "centered fixed dock"
+    },
+    "ios": {
+      "minimumInputFontSize": "16px",
+      "minimumTapTarget": "44px",
+      "safeAreaTop": "env(safe-area-inset-top)",
+      "safeAreaBottom": "env(safe-area-inset-bottom)",
+      "preventHorizontalScrolling": true,
+      "useNumericKeyboardForNumbers": true
+    }
+  },
+  "application_shell": {
+    "background": "black",
+    "contentBottomPadding": "calc(100px + env(safe-area-inset-bottom))",
+    "header": {
+      "position": "sticky",
+      "top": "0",
+      "background": "rgba(0, 0, 0, 0.92)",
+      "backdropBlur": "12px",
+      "zIndex": 30,
+      "safeAreaTop": true
+    },
+    "bottomNavigation": {
+      "position": "fixed",
+      "items": [
+        {
+          "label": "Home",
+          "icon": "House",
+          "route": "/"
+        },
+        {
+          "label": "Workout",
+          "icon": "Dumbbell",
+          "route": "/workout",
+          "primary": true
+        },
+        {
+          "label": "Profile",
+          "icon": "UserRound",
+          "route": "/profile"
+        }
+      ],
+      "activeColor": "#0A84FF",
+      "inactiveColor": "#8E8E93",
+      "background": "#1C1C1E",
+      "borderTop": "1px solid #2C2C2E",
+      "safeAreaBottom": true
+    }
+  },
+  "pages": {
+    "workoutLanding": {
+      "route": "/workout",
+      "purpose": "Start workouts and manage routines.",
+      "layoutOrder": [
+        "pageHeader",
+        "startEmptyWorkout",
+        "routinesSectionHeader",
+        "routineQuickActions",
+        "reorderHint",
+        "routineGroup",
+        "bottomNavigation"
+      ],
+      "pageHeader": {
+        "title": "Workout",
+        "titleSize": "large",
+        "titleMenuIcon": "ChevronDown",
+        "rightAction": {
+          "icon": "Settings2",
+          "ariaLabel": "Workout settings",
+          "optional": true
+        }
+      },
+      "startEmptyWorkout": {
+        "type": "large full-width surface button",
+        "label": "Start Empty Workout",
+        "icon": "Plus",
+        "height": "64px",
+        "action": "Use the existing blank workout creation logic, then navigate to the active workout page.",
+        "style": {
+          "background": "#1C1C1E",
+          "pressedBackground": "#2C2C2E",
+          "text": "#FFFFFF"
+        }
+      },
+      "routinesSectionHeader": {
+        "title": "Routines",
+        "rightAction": {
+          "icon": "FolderPlus",
+          "ariaLabel": "Create routine",
+          "route": "/routines/new"
+        }
+      },
+      "routineQuickActions": {
+        "layout": "two equal-width cards",
+        "gap": "12px",
+        "items": [
+          {
+            "label": "New Routine",
+            "icon": "ClipboardPlus",
+            "route": "/routines/new"
+          },
+          {
+            "label": "Explore",
+            "icon": "Search",
+            "route": "/exercises"
+          }
+        ],
+        "cardHeight": "76px"
+      },
+      "reorderHint": {
+        "visibleUntilDismissed": true,
+        "persistDismissalLocally": true,
+        "text": "Press and hold a routine to reorder",
+        "leadingIcon": "ListRestart",
+        "dismissIcon": "X",
+        "background": "warningSurface",
+        "textColor": "#FFFFFF"
+      },
+      "routineGroup": {
+        "title": "My Routines",
+        "showDynamicCount": true,
+        "collapsible": true,
+        "defaultExpanded": true,
+        "headerIcon": "ChevronDown",
+        "emptyState": {
+          "icon": "ClipboardList",
+          "title": "No routines yet",
+          "description": "Create a routine to start your workouts faster.",
+          "primaryAction": {
+            "label": "Create Routine",
+            "route": "/routines/new"
+          }
+        }
+      },
+      "routineCard": {
+        "background": "#1C1C1E",
+        "radius": "18px",
+        "padding": "16px",
+        "gap": "14px",
+        "elements": [
+          "routine name",
+          "overflow menu",
+          "exercise summary",
+          "start routine button"
+        ],
+        "title": {
+          "style": "text-xl font-semibold",
+          "maximumLines": 1
+        },
+        "exerciseSummary": {
+          "format": "Exercise Name (Equipment), Exercise Name (Equipment), ...",
+          "maximumLines": 2,
+          "truncate": true,
+          "color": "#8E8E93"
+        },
+        "overflowMenu": {
+          "icon": "Ellipsis",
+          "ariaLabel": "Routine options",
+          "presentation": "bottom sheet on mobile and dropdown on desktop",
+          "actions": [
+            "Edit",
+            "Duplicate",
+            "Move Up",
+            "Move Down",
+            "Delete"
+          ],
+          "deleteRequiresConfirmation": true
+        },
+        "startButton": {
+          "label": "Start Routine",
+          "height": "52px",
+          "fullWidth": true,
+          "background": "#0A84FF",
+          "pressedBackground": "#0071E3",
+          "action": "Use the existing routine workout creation logic and navigate to the active workout."
+        },
+        "interactions": {
+          "tapCard": "Open routine editor or routine details.",
+          "longPress": "Enter reorder mode if supported.",
+          "reorderFallback": "Use Move Up and Move Down menu actions."
+        }
+      }
+    },
+    "routineEditor": {
+      "routes": [
+        "/routines/new",
+        "/routines/:id/edit"
+      ],
+      "header": {
+        "leftAction": "Back",
+        "title": "New Routine or Edit Routine",
+        "rightAction": "Save"
+      },
+      "fields": [
+        {
+          "name": "name",
+          "type": "text",
+          "label": "Routine name",
+          "placeholder": "Push Day",
+          "required": true
+        },
+        {
+          "name": "notes",
+          "type": "textarea",
+          "label": "Notes",
+          "placeholder": "Optional notes",
+          "required": false
+        }
+      ],
+      "exerciseList": {
+        "sortable": true,
+        "itemElements": [
+          "drag handle",
+          "exercise name",
+          "equipment",
+          "target sets",
+          "minimum reps",
+          "maximum reps",
+          "target RPE",
+          "remove button"
+        ],
+        "addExerciseButton": {
+          "label": "Add Exercise",
+          "icon": "Plus",
+          "presentation": "sticky mobile action above bottom safe area"
+        }
+      },
+      "validation": [
+        "Routine name is required.",
+        "At least one exercise is required."
+      ]
+    },
+    "exercisePicker": {
+      "route": "/exercises",
+      "header": {
+        "title": "Exercises",
+        "backButton": true
+      },
+      "search": {
+        "sticky": true,
+        "placeholder": "Search exercises",
+        "icon": "Search"
+      },
+      "filters": [
+        {
+          "label": "Muscle",
+          "type": "horizontal filter chip or bottom sheet"
+        },
+        {
+          "label": "Equipment",
+          "type": "horizontal filter chip or bottom sheet"
+        },
+        {
+          "label": "Body Part",
+          "type": "horizontal filter chip or bottom sheet"
+        }
+      ],
+      "exerciseListItem": {
+        "height": "72px minimum",
+        "elements": [
+          "thumbnail",
+          "exercise name",
+          "primary muscle",
+          "equipment",
+          "add action"
+        ],
+        "thumbnail": {
+          "size": "52px",
+          "background": "#242426",
+          "lazyLoad": true,
+          "doNotAutoplayAnimations": true
+        }
+      },
+      "exerciseDetails": {
+        "presentation": "full-screen mobile sheet or page",
+        "elements": [
+          "exercise media",
+          "name",
+          "primary muscle",
+          "secondary muscles",
+          "equipment",
+          "instructions",
+          "recent performance",
+          "add to routine button",
+          "add to workout button"
+        ]
+      }
+    },
+    "activeWorkout": {
+      "route": "/workout/active",
+      "header": {
+        "leftAction": "Cancel",
+        "center": "Workout timer",
+        "rightAction": "Finish"
+      },
+      "metadata": [
+        "Editable workout name",
+        "Optional workout notes"
+      ],
+      "exerciseCard": {
+        "headerElements": [
+          "exercise name",
+          "equipment label",
+          "overflow menu"
+        ],
+        "showPreviousPerformance": true,
+        "setColumns": [
+          "Set",
+          "Previous",
+          "Weight",
+          "Reps",
+          "RPE",
+          "Done"
+        ],
+        "setRow": {
+          "minimumHeight": "52px",
+          "numericInputs": true,
+          "completedState": {
+            "background": "successSurface",
+            "icon": "CheckCircle2"
+          },
+          "tapPreviousValue": "Populate current weight or reps when practical.",
+          "deleteAction": "Available from a visible menu or swipe gesture with fallback."
+        },
+        "footerActions": [
+          "Add Set",
+          "Start Rest Timer"
+        ]
+      },
+      "stickyBottomActions": [
+        {
+          "label": "Add Exercise",
+          "style": "secondary"
+        },
+        {
+          "label": "Finish Workout",
+          "style": "primary"
+        }
+      ],
+      "offlineBehavior": "The active workout must remain usable and recoverable through the existing local persistence behavior."
+    },
+    "homeDashboard": {
+      "route": "/",
+      "sections": [
+        "weekly summary",
+        "recent workout",
+        "recent personal records",
+        "progress snapshot"
+      ],
+      "cardStyle": "compact glanceable dark cards"
+    },
+    "history": {
+      "route": "/history",
+      "grouping": "by date",
+      "workoutCardElements": [
+        "workout name",
+        "date",
+        "duration",
+        "exercise count",
+        "training volume",
+        "navigation chevron"
+      ]
+    },
+    "profile": {
+      "route": "/profile",
+      "sections": [
+        "account",
+        "weight units",
+        "default rest timer",
+        "CSV export",
+        "logout"
+      ]
+    }
+  },
+  "shared_components": [
+    "AppShell",
+    "MobileHeader",
+    "BottomNavigation",
+    "SurfaceCard",
+    "PrimaryButton",
+    "SecondaryButton",
+    "IconButton",
+    "SectionHeader",
+    "RoutineCard",
+    "RoutineGroup",
+    "RoutineQuickAction",
+    "DismissibleBanner",
+    "BottomSheet",
+    "ConfirmDialog",
+    "ExerciseListItem",
+    "ExerciseDetails",
+    "ActiveWorkoutExerciseCard",
+    "SetRow",
+    "WorkoutTimer",
+    "RestTimer",
+    "LoadingSkeleton",
+    "EmptyState",
+    "ErrorState"
+  ],
+  "component_requirements": {
+    "buttons": {
+      "minimumTapTarget": "44px",
+      "showPressedState": true,
+      "showDisabledState": true,
+      "iconOnlyRequiresAriaLabel": true
+    },
+    "bottomSheet": {
+      "mobileOnlyPreferred": true,
+      "roundedTopCorners": "22px",
+      "dragHandle": true,
+      "safeAreaBottom": true,
+      "closeOnBackdrop": true,
+      "keyboardAccessible": true
+    },
+    "dialogs": {
+      "focusTrap": true,
+      "escapeCloses": true,
+      "destructiveActionsClearlyMarked": true
+    },
+    "loading": {
+      "useSkeletons": true,
+      "skeletonShapeShouldMatchFinalContent": true
+    }
+  },
+  "interaction_states": {
+    "loading": "Render skeleton versions of headers, routine cards, and list items.",
+    "empty": "Show a clear explanation and one primary next action.",
+    "error": "Show an inline error message with a retry action.",
+    "pressed": "Use a slightly lighter surface or lower opacity.",
+    "disabled": "Reduce opacity and disable pointer events.",
+    "offline": "Show a compact banner while preserving active workout editing.",
+    "saving": "Disable duplicate submissions and show a spinner without hiding entered data."
+  },
+  "accessibility": {
+    "minimumContrast": "WCAG AA where practical",
+    "touchTarget": "44px minimum",
+    "iconButtons": "Require aria-label",
+    "focusStates": "Visible focus rings",
+    "keyboardNavigation": true,
+    "reducedMotion": true,
+    "largeTextSupport": true,
+    "avoidColorOnlyMeaning": true
+  },
+  "tailwind": {
+    "required": true,
+    "recommendedPackages": [
+      "lucide-react",
+      "clsx",
+      "tailwind-merge"
+    ],
+    "rules": [
+      "Use reusable components for repeated class combinations.",
+      "Use a cn helper for conditional classes.",
+      "Do not hardcode one iPhone width.",
+      "Do not use desktop-first layouts.",
+      "Do not create horizontal scrolling.",
+      "Do not use tiny icon buttons.",
+      "Do not autoplay many exercise animations in list views."
+    ]
+  },
+  "data_integration": {
+    "rules": [
+      "Use existing API clients, hooks, and Supabase services.",
+      "Do not create a second data-fetching architecture.",
+      "Do not query Supabase directly from random presentation components when a service already exists.",
+      "Use real routine and workout data.",
+      "Preserve existing authentication and authorization behavior.",
+      "Invalidate or refresh existing queries after create, update, duplicate, delete, reorder, or workout start actions."
+    ]
+  },
+  "performance": {
+    "requirements": [
+      "Lazy-load exercise media.",
+      "Do not load full exercise animations in search lists.",
+      "Avoid unnecessary rerenders while editing sets.",
+      "Use skeleton loading instead of blocking spinners.",
+      "Keep the initial workout page lightweight.",
+      "Preserve active workout state during navigation and refresh."
+    ]
+  },
+  "acceptance_criteria": [
+    "The workout landing page contains the header, start-empty button, routines heading, quick actions, routine group, routine cards, and fixed bottom navigation.",
+    "The page uses real existing routine data.",
+    "The interface works without horizontal scrolling at 320px, 375px, 390px, and 430px widths.",
+    "The interface remains centered and usable at 768px and 1024px widths.",
+    "Bottom navigation never covers page content.",
+    "Safe-area insets work on iPhone.",
+    "Starting an empty workout uses existing workout logic.",
+    "Starting a saved routine uses existing routine workout logic.",
+    "Creating and editing routines works.",
+    "Duplicating and deleting routines works.",
+    "Routine ordering can be changed through drag behavior or accessible move actions.",
+    "Loading, empty, error, saving, and offline states are visible and usable.",
+    "All frontend styling uses Tailwind CSS.",
+    "Core UI is composed from reusable components.",
+    "The frontend builds without TypeScript errors.",
+    "No backend or database architecture is changed."
+  ]
+}
