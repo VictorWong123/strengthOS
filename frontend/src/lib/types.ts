@@ -50,4 +50,17 @@ export type Routine = {
   user_id: string
   name: string
   notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type RoutineExercise = {
+  id: string
+  routine_id: string
+  exercise_id: string
+  exercise_order: number
+  target_sets: number | null
+  target_reps: string | null
+  notes: string | null
+  created_at: string
 }
