@@ -26,6 +26,8 @@ def make_settings(**overrides: object) -> Settings:
         "supabase_url": "https://example.supabase.co",
         "supabase_anon_key": SecretStr("anon-key"),
         "supabase_service_role_key": SecretStr("service-role"),
+        "admin_api_key": SecretStr(""),
+        "exercise_api_key": SecretStr(""),
     }
     values.update(overrides)
     return Settings(**values)
