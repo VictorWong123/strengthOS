@@ -19,7 +19,7 @@ type SearchableExercise = {
   searchText: string
 }
 
-type FilterKey = 'primary_muscle' | 'equipment' | 'body_part'
+type FilterKey = 'primary_muscle' | 'equipment'
 
 export function ExercisePicker({
   exercises,
@@ -30,7 +30,7 @@ export function ExercisePicker({
   onOpenDetails,
 }: Props) {
   const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState<Record<FilterKey, string>>({ primary_muscle: '', equipment: '', body_part: '' })
+  const [filters, setFilters] = useState<Record<FilterKey, string>>({ primary_muscle: '', equipment: '' })
   const terms = useMemo(() => expandSearch(query), [query])
   const searchableExercises = useMemo<SearchableExercise[]>(
     () =>
@@ -45,7 +45,6 @@ export function ExercisePicker({
     () => ({
       primary_muscle: uniqueOptions(exercises.map((exercise) => exercise.primary_muscle)),
       equipment: uniqueOptions(exercises.map((exercise) => exercise.equipment)),
-      body_part: uniqueOptions(exercises.map((exercise) => exercise.body_part)),
     }),
     [exercises],
   )
@@ -57,7 +56,6 @@ export function ExercisePicker({
     return source
       .filter((exercise) => !filters.primary_muscle || exercise.primary_muscle === filters.primary_muscle)
       .filter((exercise) => !filters.equipment || exercise.equipment === filters.equipment)
-      .filter((exercise) => !filters.body_part || exercise.body_part === filters.body_part)
       .slice(0, 80)
   }, [exercises, filters, query, searchableExercises, terms])
 
@@ -71,7 +69,6 @@ export function ExercisePicker({
         <div className="scrollbar-hidden mt-3 flex gap-2 overflow-x-auto">
           <FilterSelect label="Muscle" value={filters.primary_muscle} options={options.primary_muscle} onChange={(value) => setFilters((current) => ({ ...current, primary_muscle: value }))} />
           <FilterSelect label="Equipment" value={filters.equipment} options={options.equipment} onChange={(value) => setFilters((current) => ({ ...current, equipment: value }))} />
-          <FilterSelect label="Body Part" value={filters.body_part} options={options.body_part} onChange={(value) => setFilters((current) => ({ ...current, body_part: value }))} />
         </div>
       </div>
       {isLoading ? (
@@ -158,5 +155,5 @@ function ExerciseListItem({
 }
 
 function uniqueOptions(values: Array<string | null>): string[] {
-  return Array.from(new Set(values.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b)).slice(0, 40)
+  return Array.from(new Set(values.filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b))
 }

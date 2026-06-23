@@ -83,6 +83,32 @@ def test_exercisedb_provider_uses_credentials_when_available() -> None:
     assert isinstance(get_exercise_provider(settings), ExerciseDBProvider)
 
 
+def test_exercisedb_provider_normalizes_current_api_fields() -> None:
+    settings = make_settings(
+        exercise_api_provider="exercisedb",
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+    )
+    provider = ExerciseDBProvider(settings)
+
+    exercise = provider._normalize(
+        {
+            "id": "0001",
+            "name": "3/4 sit-up",
+            "target": "abs",
+            "bodyPart": "waist",
+            "equipment": "body weight",
+            "secondaryMuscles": ["hip flexors"],
+        }
+    )
+
+    assert exercise.external_id == "0001"
+    assert exercise.primary_muscle == "Abs"
+    assert exercise.body_part == "Waist"
+    assert exercise.equipment == "Body Weight"
+    assert exercise.secondary_muscles == ["Hip Flexors"]
+
+
 @pytest.mark.asyncio
 async def test_exercisedb_provider_falls_back_to_body_part_endpoints(
     monkeypatch: pytest.MonkeyPatch,

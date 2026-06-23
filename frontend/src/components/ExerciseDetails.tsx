@@ -1,19 +1,19 @@
 import { X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { bestCompletedSet, estimatedOneRepMax } from '../lib/performance'
 import type { Exercise, WorkoutSet } from '../lib/types'
 import { ExerciseMedia } from './ExerciseMedia'
-import { Badge, IconButton, PrimaryButton, SecondaryButton, SurfaceCard } from './ui'
+import { Badge, IconButton, SurfaceCard } from './ui'
 
 type Props = {
   exercise: Exercise
   sets: WorkoutSet[]
   open?: boolean
   onClose: () => void
-  onAddToWorkout: () => void
-  onAddToRoutine: () => void
+  action?: ReactNode
 }
 
-export function ExerciseDetails({ exercise, sets, open = true, onClose, onAddToWorkout, onAddToRoutine }: Props) {
+export function ExerciseDetails({ exercise, sets, open = true, onClose, action }: Props) {
   const bestSet = bestCompletedSet(sets)
   const bestE1rm = bestSet ? estimatedOneRepMax(bestSet) : null
 
@@ -64,10 +64,7 @@ export function ExerciseDetails({ exercise, sets, open = true, onClose, onAddToW
           <Metric label="Best" value={bestSet ? `${bestSet.weight} x ${bestSet.reps}` : '-'} />
           <Metric label="1RM" value={bestE1rm ? `${bestE1rm}` : '-'} />
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <PrimaryButton onClick={onAddToWorkout}>Add to Workout</PrimaryButton>
-          <SecondaryButton onClick={onAddToRoutine}>Add to Routine</SecondaryButton>
-        </div>
+        {action ? <div className="grid gap-3">{action}</div> : null}
       </SurfaceCard>
     </div>
   )

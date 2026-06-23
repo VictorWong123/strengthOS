@@ -160,9 +160,9 @@ class ExerciseDBProvider(ExerciseProvider):
         if not external_id or not name:
             raise ValueError("ExerciseDB record is missing exerciseId/id or name.")
         external_id = str(external_id)
-        equipments = item.get("equipments") or []
-        body_parts = item.get("bodyParts") or []
-        target_muscles = item.get("targetMuscles") or []
+        equipments = item.get("equipments") or ([item["equipment"]] if item.get("equipment") else [])
+        body_parts = item.get("bodyParts") or ([item["bodyPart"]] if item.get("bodyPart") else [])
+        target_muscles = item.get("targetMuscles") or ([item["target"]] if item.get("target") else [])
         secondary_muscles = item.get("secondaryMuscles") or []
         image_url = item.get("imageUrl") or f"/api/exercise-images/{external_id}?resolution=180"
         video_url = item.get("videoUrl")

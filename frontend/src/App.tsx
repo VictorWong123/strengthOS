@@ -64,6 +64,7 @@ type StatusMessage = {
 }
 
 type PickerMode = 'workout' | 'routine'
+type ExerciseDetailSource = 'workout' | 'routine' | 'library' | 'active-workout'
 
 type DraftRoutineExercise = RoutineExercise & {
   exercise: Exercise | null
@@ -92,6 +93,7 @@ export function App() {
   const [routineGroupExpanded, setRoutineGroupExpanded] = useState(true)
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null)
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null)
+  const [selectedExerciseSource, setSelectedExerciseSource] = useState<ExerciseDetailSource>('library')
   const [selectedExerciseSets, setSelectedExerciseSets] = useState<WorkoutSet[]>([])
   const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null)
   const [routineToDelete, setRoutineToDelete] = useState<Routine | null>(null)
@@ -653,8 +655,9 @@ export function App() {
     setShowReorderHint(false)
   }
 
-  function openExerciseDetails(exercise: Exercise) {
+  function openExerciseDetails(exercise: Exercise, source: ExerciseDetailSource = 'library') {
     setSelectedExercise(exercise)
+    setSelectedExerciseSource(source)
   }
 
   function openRoutinePicker() {
@@ -873,7 +876,7 @@ export function App() {
           isLoading={isInitialLoading}
           actionLabel="Add"
           onSelect={handleExerciseSelected}
-          onOpenDetails={openExerciseDetails}
+          onOpenDetails={(exercise) => openExerciseDetails(exercise, pickerMode === 'routine' ? 'routine' : 'workout')}
         />
       </BottomSheet>
 
@@ -918,11 +921,7 @@ export function App() {
           sets={selectedExerciseSets}
           open={Boolean(selectedExercise)}
           onClose={() => setSelectedExercise(null)}
-          onAddToWorkout={() => void addExerciseToWorkout(selectedExercise, true)}
-          onAddToRoutine={() => {
-            addToRoutineFlow(selectedExercise)
-            setSelectedExercise(null)
-          }}
+          action={renderExerciseDetailsAction(selectedExercise)}
         />
       ) : null}
     </AppShell>
@@ -937,6 +936,24 @@ export function App() {
     setPendingRoutineExercises([exercise])
     setRoutineDraft(null)
     navigate('/routines/new')
+  }
+
+  function renderExerciseDetailsAction(exercise: Exercise) {
+    if (selectedExerciseSource === 'active-workout') return null
+    if (selectedExerciseSource === 'routine' || route.name === 'routine-new' || route.name === 'routine-edit') {
+      return (
+        <PrimaryButton
+          onClick={() => {
+            addToRoutineFlow(exercise)
+            setSelectedExercise(null)
+          }}
+        >
+          Add to Routine
+        </PrimaryButton>
+      )
+    }
+
+    return <PrimaryButton onClick={() => void addExerciseToWorkout(exercise, true)}>Add to Workout</PrimaryButton>
   }
 
   function renderPage() {
@@ -1081,7 +1098,7 @@ export function App() {
               previousSetsByExerciseId={previousSetsByExerciseId}
               onCreateWorkout={() => void startEmptyWorkout()}
               onOpenExercisePicker={openWorkoutPicker}
-              onOpenExerciseDetails={openExerciseDetails}
+              onOpenExerciseDetails={(exercise) => openExerciseDetails(exercise, 'active-workout')}
               onAddSet={(workoutExerciseId) => void addSet(workoutExerciseId)}
               onUpdateSet={(set, patch) => void updateSet(set, patch)}
               onDeleteSet={(set) => void deleteSet(set)}
@@ -1158,7 +1175,7 @@ export function App() {
                 actionLabel="Add"
                 stickyTopClassName="top-[calc(96px+env(safe-area-inset-top))]"
                 onSelect={(exercise) => void addExerciseToWorkout(exercise, true)}
-                onOpenDetails={openExerciseDetails}
+                onOpenDetails={(exercise) => openExerciseDetails(exercise, 'library')}
               />
             )}
           </div>

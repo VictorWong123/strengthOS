@@ -39,7 +39,7 @@ pytest
 
 ## Coding Style & Naming Conventions
 
-Use TypeScript for frontend code and Python 3.11+ for backend code. Prefer small, focused modules and reusable components over duplicated class strings or repeated logic. React components use `PascalCase`; hooks/helpers use `camelCase`. Python modules and functions use `snake_case`.
+Use TypeScript for frontend code and Python 3.11+ for backend code. Prefer small, focused modules and reusable components over duplicated class strings or repeated logic. If a component, function, API helper, styling pattern, or workflow is likely to be reused, extract it into a focused shared component/function instead of duplicating it. React components use `PascalCase`; hooks/helpers use `camelCase`. Python modules and functions use `snake_case`.
 
 Backend public modules, services, providers, and scripts should include useful docstrings that explain purpose, side effects, and failure behavior.
 
@@ -48,6 +48,10 @@ Backend public modules, services, providers, and scripts should include useful d
 Backend tests use `pytest`; name files `test_*.py`. Add focused tests for providers, normalization, sync behavior, admin auth, Supabase repositories, authentication, user scoping, analytics, MCP tools, and ExerciseDB synchronization.
 
 No frontend test runner is configured yet. Until one is added, `npm run build` is the required frontend verification step.
+
+## Resource Hygiene
+
+Remove temporary artifacts when no longer needed. If you create a temporary folder or file, delete it before finishing the task. Do not modify or delete unrelated user files.
 
 ## Commit & Pull Request Guidelines
 
