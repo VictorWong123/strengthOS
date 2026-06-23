@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.config import get_settings
+from app.providers.exercisedb_client import ExerciseDBClient
 
 router = APIRouter(prefix="/exercise-images", tags=["exercise-images"])
 
@@ -30,20 +31,12 @@ async def get_exercise_image(
     if not settings.has_exercise_credentials:
         raise HTTPException(status_code=503, detail="Exercise image provider is not configured.")
 
-    headers = {
-        "x-rapidapi-host": settings.exercise_api_host,
-        "x-rapidapi-key": settings.exercise_api_key.get_secret_value(),
-        "content-type": "application/json",
-    }
+    provider_client = ExerciseDBClient(settings)
     params = {"exerciseId": external_id, "resolution": resolution}
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{settings.exercise_api_base_url.rstrip('/')}/image",
-                headers=headers,
-                params=params,
-            )
+            response = await provider_client.get(client, "/image", params=params)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Exercise image provider request failed.") from exc
 

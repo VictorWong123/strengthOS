@@ -15,6 +15,7 @@ import type { ElementType, ReactNode } from 'react'
 import type { Exercise, Routine, RoutineExercise } from '../lib/types'
 import {
   EmptyState,
+  Field,
   FixedBottomActions,
   IconButton,
   Input,
@@ -220,22 +221,20 @@ export function RoutineEditor({
         action={<PrimaryButton disabled={isSaving} onClick={onSave}>{isSaving ? 'Saving...' : 'Save'}</PrimaryButton>}
       />
       <SurfaceCard className="space-y-4">
-        <label className="block">
-          <span className="mb-2 block text-sm font-medium text-text-secondary">Routine name</span>
+        <Field label="Routine name">
           <Input
             placeholder="Push Day"
             value={name}
             onChange={(event) => onNameChange(event.target.value)}
           />
-        </label>
-        <label className="block">
-          <span className="mb-2 block text-sm font-medium text-text-secondary">Notes</span>
+        </Field>
+        <Field label="Notes">
           <Textarea
             placeholder="Optional notes"
             value={notes}
             onChange={(event) => onNotesChange(event.target.value)}
           />
-        </label>
+        </Field>
       </SurfaceCard>
 
       <div className="space-y-3">
@@ -354,13 +353,12 @@ function ActionButton({
 
 function NumberField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-medium text-text-secondary">{label}</span>
+    <Field label={label}>
       <Input
         inputMode="numeric"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </Field>
   )
 }

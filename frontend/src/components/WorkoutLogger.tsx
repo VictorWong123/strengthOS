@@ -3,7 +3,7 @@ import { CheckCircle2, Clock3, Dumbbell, Plus, TimerReset, Trash2, X } from 'luc
 import { mergeSetRpe, parseSetRpe } from '../lib/training'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 import { ExerciseSummary } from './ExerciseSummary'
-import { EmptyState, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
+import { EmptyState, Field, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
 
 type Props = {
   workout: Workout | null
@@ -79,8 +79,7 @@ export function WorkoutLogger({
           </button>
         </div>
         <SurfaceCard className="space-y-4">
-          <label className="block">
-            <span className="mb-2 block text-sm font-medium text-text-secondary">Workout name</span>
+          <Field label="Workout name">
             <Input
               value={nameDraft}
               onChange={(event) => setNameDraft(event.target.value)}
@@ -88,9 +87,8 @@ export function WorkoutLogger({
                 if (nameDraft !== workout.name) onUpdateWorkout(workout, { name: nameDraft.trim() || 'Workout' })
               }}
             />
-          </label>
-          <label className="block">
-            <span className="mb-2 block text-sm font-medium text-text-secondary">Notes</span>
+          </Field>
+          <Field label="Notes">
             <Textarea
               className="min-h-[96px]"
               value={notesDraft}
@@ -100,7 +98,7 @@ export function WorkoutLogger({
                 if (notesDraft !== (workout.notes ?? '')) onUpdateWorkout(workout, { notes: notesDraft.trim() || null })
               }}
             />
-          </label>
+          </Field>
         </SurfaceCard>
       </header>
 

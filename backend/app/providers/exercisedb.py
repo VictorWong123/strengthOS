@@ -1,8 +1,5 @@
 """ExerciseDB provider backed by RapidAPI."""
 
-import asyncio
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -10,6 +7,7 @@ import httpx
 
 from app.config import Settings
 from app.providers.base import ExerciseProvider, ProviderExercise
+from app.providers.exercisedb_client import ExerciseDBClient
 from app.providers.normalization import titleish
 
 
@@ -23,19 +21,14 @@ class ExerciseDBProvider(ExerciseProvider):
 
         self.settings = settings
         self.failures: list[dict[str, Any]] = []
-        self.base_url = settings.exercise_api_base_url.rstrip("/")
-        self.headers = {
-            "x-rapidapi-host": settings.exercise_api_host,
-            "x-rapidapi-key": settings.exercise_api_key.get_secret_value(),
-            "content-type": "application/json",
-        }
+        self.client = ExerciseDBClient(settings)
 
     async def list_exercises(self) -> list[ProviderExercise]:
         """Fetch the paginated ExerciseDB catalog."""
 
         self.failures = []
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await self._get_with_retries(
+            response = await self.client.get(
                 client,
                 "/exercises",
                 params={"limit": self.settings.exercise_sync_page_size, "offset": 0},
@@ -49,7 +42,7 @@ class ExerciseDBProvider(ExerciseProvider):
     async def _list_exercises_by_body_part(self, client: httpx.AsyncClient) -> list[ProviderExercise]:
         """Fetch the catalog through body-part endpoints when the all-exercises endpoint is unavailable."""
 
-        response = await self._get_with_retries(client, "/exercises/bodyPartList")
+        response = await self.client.get(client, "/exercises/bodyPartList")
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, list):
@@ -86,7 +79,7 @@ class ExerciseDBProvider(ExerciseProvider):
             if first_response is not None and offset == 0:
                 response = first_response
             else:
-                response = await self._get_with_retries(
+                response = await self.client.get(
                     client,
                     path,
                     params={"limit": limit, "offset": offset},
@@ -122,37 +115,11 @@ class ExerciseDBProvider(ExerciseProvider):
 
         return exercises
 
-    async def _get_with_retries(
-        self,
-        client: httpx.AsyncClient,
-        path: str,
-        params: dict[str, int] | None = None,
-    ) -> httpx.Response:
-        """GET one ExerciseDB endpoint with bounded 429 retry handling."""
-
-        retries = 0
-        while True:
-            response = await client.get(
-                f"{self.base_url}{path}",
-                headers=self.headers,
-                params=params,
-            )
-            if response.status_code != 429:
-                return response
-            if retries >= self.settings.exercise_api_max_retries:
-                response.raise_for_status()
-            retry_after = self._retry_after_seconds(response.headers.get("retry-after"))
-            await asyncio.sleep(retry_after)
-            retries += 1
-
     async def get_exercise(self, external_id: str) -> ProviderExercise | None:
         """Fetch a single ExerciseDB exercise by external ID."""
 
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{self.base_url}/exercises/exercise/{external_id}",
-                headers=self.headers,
-            )
+            response = await self.client.get(client, f"/exercises/exercise/{external_id}")
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -212,21 +179,3 @@ class ExerciseDBProvider(ExerciseProvider):
             animation_url=video_url,
             thumbnail_url=image_url,
         )
-
-    def _retry_after_seconds(self, header_value: str | None) -> int:
-        """Parse and bound an HTTP Retry-After value."""
-
-        fallback = 2
-        if not header_value:
-            return fallback
-        try:
-            delay = int(header_value)
-        except ValueError:
-            try:
-                retry_at = parsedate_to_datetime(header_value)
-                if retry_at.tzinfo is None:
-                    retry_at = retry_at.replace(tzinfo=UTC)
-                delay = int((retry_at - datetime.now(UTC)).total_seconds())
-            except (TypeError, ValueError):
-                delay = fallback
-        return max(1, min(delay, self.settings.exercise_api_max_retry_delay_seconds))

@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
-import { useState } from 'react'
 import { bestCompletedSet, estimatedOneRepMax } from '../lib/performance'
 import type { Exercise, WorkoutSet } from '../lib/types'
+import { ExerciseMedia } from './ExerciseMedia'
 import { Badge, IconButton, PrimaryButton, SecondaryButton, SurfaceCard } from './ui'
 
 type Props = {
@@ -16,9 +16,6 @@ type Props = {
 export function ExerciseDetails({ exercise, sets, open = true, onClose, onAddToWorkout, onAddToRoutine }: Props) {
   const bestSet = bestCompletedSet(sets)
   const bestE1rm = bestSet ? estimatedOneRepMax(bestSet) : null
-  const [mediaFailed, setMediaFailed] = useState(false)
-  const mediaUrl = mediaFailed ? null : exercise.animation_url ?? exercise.image_url
-  const isVideo = Boolean(mediaUrl && /\.(mp4|webm|mov)(\?|#|$)/i.test(mediaUrl))
 
   if (!open) return null
 
@@ -41,28 +38,14 @@ export function ExerciseDetails({ exercise, sets, open = true, onClose, onAddToW
           </IconButton>
         </div>
         <div className="overflow-hidden rounded-card border border-app-border bg-surface-elevated">
-          {mediaUrl ? (
-            isVideo ? (
-              <video
-                src={mediaUrl}
-                controls
-                preload="metadata"
-                onError={() => setMediaFailed(true)}
-                className="max-h-96 w-full bg-black object-contain"
-                aria-label={`${exercise.name} demonstration`}
-              />
-            ) : (
-              <img
-                src={mediaUrl}
-                alt={`${exercise.name} demonstration`}
-                loading="lazy"
-                onError={() => setMediaFailed(true)}
-                className="max-h-96 w-full object-contain"
-              />
-            )
-          ) : (
-            <div className="flex h-48 items-center justify-center text-sm text-zinc-500">No provider media available.</div>
-          )}
+          <ExerciseMedia
+            src={exercise.animation_url ?? exercise.image_url}
+            alt={`${exercise.name} demonstration`}
+            controls
+            className="max-h-96 w-full object-contain"
+            videoClassName="max-h-96 w-full bg-black object-contain"
+            fallback={<div className="flex h-48 items-center justify-center text-sm text-zinc-500">No provider media available.</div>}
+          />
         </div>
         <div>
           <h3 className="font-semibold">Instructions</h3>

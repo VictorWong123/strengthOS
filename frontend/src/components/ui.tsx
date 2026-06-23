@@ -79,6 +79,11 @@ type FixedBottomActionsProps = {
   children: ReactNode
 }
 
+type FieldProps = {
+  label: string
+  children: ReactNode
+}
+
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home', href: '/', icon: House },
   { label: 'Workout', href: '/workout', icon: Dumbbell },
@@ -253,6 +258,15 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
       )}
       {...props}
     />
+  )
+}
+
+export function Field({ label, children }: FieldProps) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-medium text-text-secondary">{label}</span>
+      {children}
+    </label>
   )
 }
 

@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { Exercise } from '../lib/types'
+import { ExerciseMedia } from './ExerciseMedia'
 import { Badge, cn } from './ui'
 
 type ExerciseSummaryProps = {
@@ -32,27 +33,19 @@ export function ExerciseSummary({ exercise, detail, action, className, onOpenDet
 }
 
 function ExerciseThumbnail({ exercise, onOpenDetails }: { exercise: Exercise; onOpenDetails: (exercise: Exercise) => void }) {
-  const [failed, setFailed] = useState(false)
-  const showImage = exercise.thumbnail_url && !failed
-
   return (
     <button
       type="button"
       className="flex h-[52px] w-[52px] shrink-0 items-center justify-center overflow-hidden rounded-button bg-surface-elevated text-[10px] text-zinc-500"
       onClick={() => onOpenDetails(exercise)}
     >
-      {showImage ? (
-        <img
-          src={exercise.thumbnail_url ?? ''}
-          alt={`${exercise.name} thumbnail`}
-          loading="lazy"
-          decoding="async"
-          onError={() => setFailed(true)}
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        'No media'
-      )}
+      <ExerciseMedia
+        src={exercise.thumbnail_url}
+        alt={`${exercise.name} thumbnail`}
+        decoding="async"
+        className="h-full w-full object-cover"
+        fallback="No media"
+      />
     </button>
   )
 }
