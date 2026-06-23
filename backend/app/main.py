@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.mcp.server import create_mcp_app
-from app.routers import admin, health
+from app.routers import admin, exercise_images, health
 
 
 def create_app() -> FastAPI:
@@ -27,6 +27,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(admin.router)
+    app.include_router(exercise_images.router)
     app.mount("/mcp", mcp_app)
     return app
 

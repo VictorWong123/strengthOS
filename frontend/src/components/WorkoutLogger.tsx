@@ -2,7 +2,8 @@ import { memo, useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, Clock3, Dumbbell, Plus, TimerReset, Trash2, X } from 'lucide-react'
 import { mergeSetRpe, parseSetRpe } from '../lib/training'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
-import { EmptyState, IconButton, PrimaryButton, SecondaryButton, SurfaceCard, cn } from './ui'
+import { ExerciseSummary } from './ExerciseSummary'
+import { EmptyState, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
 
 type Props = {
   workout: Workout | null
@@ -12,6 +13,7 @@ type Props = {
   previousSetsByExerciseId: Map<string, WorkoutSet[]>
   onCreateWorkout: () => void
   onOpenExercisePicker: () => void
+  onOpenExerciseDetails: (exercise: Exercise) => void
   onAddSet: (workoutExerciseId: string) => void
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
@@ -30,6 +32,7 @@ export function WorkoutLogger({
   previousSetsByExerciseId,
   onCreateWorkout,
   onOpenExercisePicker,
+  onOpenExerciseDetails,
   onAddSet,
   onUpdateSet,
   onDeleteSet,
@@ -64,7 +67,7 @@ export function WorkoutLogger({
   }
 
   return (
-    <div className="space-y-5 pb-28">
+    <div className="space-y-5 pb-36">
       <header className="grid gap-4">
         <div className="flex items-center justify-between gap-3">
           <button type="button" onClick={onLeaveWorkout} className="text-sm font-medium text-text-secondary">
@@ -78,8 +81,7 @@ export function WorkoutLogger({
         <SurfaceCard className="space-y-4">
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-text-secondary">Workout name</span>
-            <input
-              className="w-full rounded-xl border border-white/10 bg-surface-input px-3 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
+            <Input
               value={nameDraft}
               onChange={(event) => setNameDraft(event.target.value)}
               onBlur={() => {
@@ -89,8 +91,8 @@ export function WorkoutLogger({
           </label>
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-text-secondary">Notes</span>
-            <textarea
-              className="min-h-[96px] w-full rounded-xl border border-white/10 bg-surface-input px-3 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
+            <Textarea
+              className="min-h-[96px]"
               value={notesDraft}
               placeholder="Optional notes"
               onChange={(event) => setNotesDraft(event.target.value)}
@@ -110,6 +112,10 @@ export function WorkoutLogger({
               exercise={exerciseById.get(item.exercise_id) ?? null}
               sets={setsByWorkoutExercise.get(item.id) ?? []}
               previousSets={previousSetsByExerciseId.get(item.exercise_id) ?? []}
+              onOpenDetails={() => {
+                const exercise = exerciseById.get(item.exercise_id)
+                if (exercise) onOpenExerciseDetails(exercise)
+              }}
               onAddSet={() => onAddSet(item.id)}
               onUpdateSet={onUpdateSet}
               onDeleteSet={onDeleteSet}
@@ -125,16 +131,14 @@ export function WorkoutLogger({
         )}
       </div>
 
-      <div className="fixed inset-x-0 bottom-[calc(92px+env(safe-area-inset-bottom))] z-20 px-4 md:px-6">
-        <div className="mx-auto flex max-w-[760px] gap-3">
-          <SecondaryButton className="flex-1" onClick={onOpenExercisePicker}>
-            Add Exercise
-          </SecondaryButton>
-          <PrimaryButton className="flex-1" onClick={onFinishWorkout}>
-            Finish Workout
-          </PrimaryButton>
-        </div>
-      </div>
+      <FixedBottomActions>
+        <SecondaryButton className="flex-1" onClick={onOpenExercisePicker}>
+          Add Exercise
+        </SecondaryButton>
+        <PrimaryButton className="flex-1" onClick={onFinishWorkout}>
+          Finish Workout
+        </PrimaryButton>
+      </FixedBottomActions>
     </div>
   )
 }
@@ -167,6 +171,7 @@ export function ActiveWorkoutExerciseCard({
   sets,
   previousSets,
   onAddSet,
+  onOpenDetails,
   onUpdateSet,
   onDeleteSet,
 }: {
@@ -174,6 +179,7 @@ export function ActiveWorkoutExerciseCard({
   sets: WorkoutSet[]
   previousSets: WorkoutSet[]
   onAddSet: () => void
+  onOpenDetails: () => void
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
 }) {
@@ -182,13 +188,19 @@ export function ActiveWorkoutExerciseCard({
   return (
     <SurfaceCard className="space-y-4">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-xl font-semibold">{exercise?.name ?? 'Exercise'}</h3>
-          <p className="mt-1 text-sm text-text-secondary">{exercise?.equipment ?? 'No equipment'}</p>
-          <p className="mt-2 text-xs text-text-muted">
-            {previousSets.length ? `Previous: ${formatPreviousSet(previousSets[0])}` : 'No previous performance yet'}
-          </p>
-        </div>
+        {exercise ? (
+          <ExerciseSummary
+            className="min-w-0 flex-1"
+            exercise={exercise}
+            detail={previousSets.length ? `Previous: ${formatPreviousSet(previousSets[0])}` : 'No previous performance yet'}
+            onOpenDetails={() => onOpenDetails()}
+          />
+        ) : (
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-xl font-semibold">Exercise</h3>
+            <p className="mt-1 text-sm text-text-secondary">No equipment</p>
+          </div>
+        )}
         <IconButton aria-label={`Add set to ${exercise?.name ?? 'exercise'}`} onClick={onAddSet}>
           <Plus className="h-4 w-4" aria-hidden="true" />
         </IconButton>

@@ -1081,6 +1081,7 @@ export function App() {
               previousSetsByExerciseId={previousSetsByExerciseId}
               onCreateWorkout={() => void startEmptyWorkout()}
               onOpenExercisePicker={openWorkoutPicker}
+              onOpenExerciseDetails={openExerciseDetails}
               onAddSet={(workoutExerciseId) => void addSet(workoutExerciseId)}
               onUpdateSet={(set, patch) => void updateSet(set, patch)}
               onDeleteSet={(set) => void deleteSet(set)}
@@ -1155,6 +1156,7 @@ export function App() {
                 exercises={exercises}
                 isLoading={isInitialLoading}
                 actionLabel="Add"
+                stickyTopClassName="top-[calc(96px+env(safe-area-inset-top))]"
                 onSelect={(exercise) => void addExerciseToWorkout(exercise, true)}
                 onOpenDetails={openExerciseDetails}
               />

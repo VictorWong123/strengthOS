@@ -2,12 +2,14 @@ import { Plus, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { expandSearch, normalizeSearch } from '../lib/search'
 import type { Exercise } from '../lib/types'
-import { Badge, EmptyState, IconButton, Input, SurfaceCard, cn } from './ui'
+import { ExerciseSummary } from './ExerciseSummary'
+import { EmptyState, IconButton, Input, SurfaceCard, cn } from './ui'
 
 type Props = {
   exercises: Exercise[]
   isLoading?: boolean
   actionLabel?: string
+  stickyTopClassName?: string
   onSelect: (exercise: Exercise) => void
   onOpenDetails: (exercise: Exercise) => void
 }
@@ -19,7 +21,14 @@ type SearchableExercise = {
 
 type FilterKey = 'primary_muscle' | 'equipment' | 'body_part'
 
-export function ExercisePicker({ exercises, isLoading = false, actionLabel = 'Add', onSelect, onOpenDetails }: Props) {
+export function ExercisePicker({
+  exercises,
+  isLoading = false,
+  actionLabel = 'Add',
+  stickyTopClassName = 'top-0',
+  onSelect,
+  onOpenDetails,
+}: Props) {
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState<Record<FilterKey, string>>({ primary_muscle: '', equipment: '', body_part: '' })
   const terms = useMemo(() => expandSearch(query), [query])
@@ -54,7 +63,7 @@ export function ExercisePicker({ exercises, isLoading = false, actionLabel = 'Ad
 
   return (
     <section className="space-y-4">
-      <div className="sticky top-[calc(80px+env(safe-area-inset-top))] z-20 -mx-4 bg-black/90 px-4 py-3 backdrop-blur md:-mx-6 md:px-6">
+      <div className={cn('sticky z-20 -mx-4 bg-black/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6', stickyTopClassName)}>
         <label className="relative block">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-500" aria-hidden="true" />
           <Input className="pl-10" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search exercises" />
@@ -71,6 +80,12 @@ export function ExercisePicker({ exercises, isLoading = false, actionLabel = 'Ad
           <SurfaceCard className="h-[96px] animate-pulse" />
           <SurfaceCard className="h-[96px] animate-pulse" />
         </div>
+      ) : !exercises.length ? (
+        <EmptyState
+          icon={<Search className="h-6 w-6" aria-hidden="true" />}
+          title="Exercise catalog is empty"
+          description="Sync ExerciseDB before searching or adding exercises."
+        />
       ) : filtered.length ? (
         <div className="grid gap-3">
           {filtered.map((exercise) => (
@@ -129,42 +144,16 @@ function ExerciseListItem({
 }) {
   return (
     <SurfaceCard className="p-3">
-      <div className="flex min-h-[72px] items-center gap-3">
-        <Thumbnail exercise={exercise} onOpenDetails={onOpenDetails} />
-        <button className="min-w-0 flex-1 text-left" onClick={() => onOpenDetails(exercise)}>
-          <span className="block truncate font-semibold text-white">{exercise.name}</span>
-          <span className="mt-1 flex flex-wrap gap-2">
-            {exercise.primary_muscle ? <Badge>{exercise.primary_muscle}</Badge> : null}
-            <Badge className="bg-blue-500/15 text-blue-200">{exercise.equipment ?? 'No equipment'}</Badge>
-          </span>
-        </button>
-        <IconButton aria-label={`${actionLabel} ${exercise.name}`} onClick={() => onSelect(exercise)}>
-          <Plus className="h-5 w-5" aria-hidden="true" />
-        </IconButton>
-      </div>
+      <ExerciseSummary
+        exercise={exercise}
+        onOpenDetails={onOpenDetails}
+        action={
+          <IconButton aria-label={`${actionLabel} ${exercise.name}`} onClick={() => onSelect(exercise)}>
+            <Plus className="h-5 w-5" aria-hidden="true" />
+          </IconButton>
+        }
+      />
     </SurfaceCard>
-  )
-}
-
-function Thumbnail({ exercise, onOpenDetails }: { exercise: Exercise; onOpenDetails: (exercise: Exercise) => void }) {
-  const [failed, setFailed] = useState(false)
-  const showImage = exercise.thumbnail_url && !failed
-
-  return (
-    <button className="flex h-[52px] w-[52px] shrink-0 items-center justify-center overflow-hidden rounded-button bg-surface-elevated text-[10px] text-zinc-500" onClick={() => onOpenDetails(exercise)}>
-      {showImage ? (
-        <img
-          src={exercise.thumbnail_url ?? ''}
-          alt={`${exercise.name} thumbnail`}
-          loading="lazy"
-          decoding="async"
-          onError={() => setFailed(true)}
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        'No media'
-      )}
-    </button>
   )
 }
 

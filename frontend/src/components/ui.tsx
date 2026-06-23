@@ -2,9 +2,11 @@ import { House, type LucideIcon, UserRound, Dumbbell, X } from 'lucide-react'
 import {
   useEffect,
   useId,
+  isValidElement,
   useMemo,
   useRef,
   type ButtonHTMLAttributes,
+  type ElementType,
   type HTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -67,10 +69,14 @@ type BannerProps = {
 }
 
 type StateProps = {
-  icon: LucideIcon | ReactNode
+  icon: ElementType | ReactNode
   title: string
   description: string
   action?: ReactNode
+}
+
+type FixedBottomActionsProps = {
+  children: ReactNode
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -96,7 +102,7 @@ export function AppShell({ children, currentPath, onNavigate, hideNavigation = f
   return (
     <div className="min-h-screen bg-surface-page text-text-primary">
       <div className="mx-auto min-h-screen max-w-[760px]">
-        <div className={cn('px-4 pb-[calc(100px+env(safe-area-inset-bottom))] md:px-6', hideNavigation && 'pb-8')}>
+        <div className={cn('px-4 pb-[calc(132px+env(safe-area-inset-bottom))] md:px-6', hideNavigation && 'pb-8')}>
           {children}
         </div>
       </div>
@@ -124,7 +130,7 @@ export function MobileHeader({ title, leftAction, rightAction, left, right, subt
 
 export function BottomNavigation({ currentPath, onNavigate }: BottomNavigationProps) {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(12px,env(safe-area-inset-bottom))]">
+    <nav className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(18px,env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-[760px] rounded-[24px] border border-white/10 bg-surface-card/95 px-2 py-2 shadow-panel backdrop-blur">
         <ul className="grid grid-cols-3 gap-1">
           {NAV_ITEMS.map(({ label, href, icon: Icon }) => {
@@ -335,7 +341,7 @@ export function EmptyState({ icon: Icon, title, description, action }: StateProp
   return (
     <SurfaceCard className="flex flex-col items-center gap-3 py-8 text-center">
       <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-input">
-        {typeof Icon === 'function' ? <Icon className="h-6 w-6 text-text-secondary" aria-hidden="true" /> : Icon}
+        {renderStateIcon(Icon, 'h-6 w-6 text-text-secondary')}
       </div>
       <div>
         <h3 className="text-lg font-semibold">{title}</h3>
@@ -360,7 +366,7 @@ export function ErrorState({
     <SurfaceCard className="border-accent-danger/20 bg-surface-danger">
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-danger/15">
-          {typeof Icon === 'function' ? <Icon className="h-5 w-5 text-accent-danger" aria-hidden="true" /> : Icon}
+          {renderStateIcon(Icon, 'h-5 w-5 text-accent-danger')}
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="text-base font-semibold">{resolvedTitle}</h3>
@@ -373,6 +379,20 @@ export function ErrorState({
   )
 }
 
+function renderStateIcon(icon: StateProps['icon'], className: string) {
+  if (isValidElement(icon)) return icon
+  const Icon = icon as ElementType
+  return <Icon className={className} aria-hidden="true" />
+}
+
+export function FixedBottomActions({ children }: FixedBottomActionsProps) {
+  return (
+    <div className="fixed inset-x-0 bottom-[calc(112px+env(safe-area-inset-bottom))] z-20 px-4 md:px-6">
+      <div className="mx-auto flex max-w-[760px] gap-3">{children}</div>
+    </div>
+  )
+}
+
 export function BottomSheet({ open, onClose, title, description, children, footer }: OverlayProps) {
   const titleId = useId()
   const descriptionId = useId()
@@ -382,7 +402,7 @@ export function BottomSheet({ open, onClose, title, description, children, foote
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="absolute inset-x-0 bottom-0 mx-auto max-w-[760px] px-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+      <div className="absolute inset-x-0 bottom-0 mx-auto max-w-[760px] px-3 pb-[max(18px,env(safe-area-inset-bottom))]">
         <div
           ref={containerRef}
           role="dialog"
@@ -390,7 +410,7 @@ export function BottomSheet({ open, onClose, title, description, children, foote
           aria-labelledby={titleId}
           aria-describedby={description ? descriptionId : undefined}
           tabIndex={-1}
-          className="max-h-[85vh] overflow-hidden rounded-modal border border-white/10 bg-surface-card shadow-panel outline-none"
+          className="max-h-[92vh] overflow-hidden rounded-modal border border-white/10 bg-surface-card shadow-panel outline-none"
         >
           <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-white/15" aria-hidden="true" />
           <div className="flex items-start justify-between gap-4 px-4 pb-4 pt-3">
@@ -408,7 +428,7 @@ export function BottomSheet({ open, onClose, title, description, children, foote
               <X className="h-4 w-4" aria-hidden="true" />
             </IconButton>
           </div>
-          <div className="max-h-[calc(85vh-132px)] overflow-y-auto px-4 pb-4">{children}</div>
+          <div className="max-h-[calc(92vh-132px)] overflow-y-auto px-4 pb-4">{children}</div>
           {footer ? <div className="border-t border-white/10 px-4 py-4">{footer}</div> : null}
         </div>
       </div>

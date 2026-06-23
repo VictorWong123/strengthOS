@@ -30,6 +30,7 @@ Backend:
 cd backend
 pip install -e ".[dev]"
 uvicorn app.main:app --reload
+# py -m uvicorn app.main:app --reload  if on windows
 python -m app.scripts.sync_exercises
 pytest
 ```

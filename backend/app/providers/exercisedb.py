@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -26,50 +27,123 @@ class ExerciseDBProvider(ExerciseProvider):
         self.headers = {
             "x-rapidapi-host": settings.exercise_api_host,
             "x-rapidapi-key": settings.exercise_api_key.get_secret_value(),
+            "content-type": "application/json",
         }
 
     async def list_exercises(self) -> list[ProviderExercise]:
         """Fetch the paginated ExerciseDB catalog."""
 
-        exercises: list[ProviderExercise] = []
         self.failures = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await self._get_with_retries(
+                client,
+                "/exercises",
+                params={"limit": self.settings.exercise_sync_page_size, "offset": 0},
+            )
+            if response.status_code == 403:
+                return await self._list_exercises_by_body_part(client)
+
+            response.raise_for_status()
+            return await self._list_paginated_exercises(client, "/exercises", first_response=response)
+
+    async def _list_exercises_by_body_part(self, client: httpx.AsyncClient) -> list[ProviderExercise]:
+        """Fetch the catalog through body-part endpoints when the all-exercises endpoint is unavailable."""
+
+        response = await self._get_with_retries(client, "/exercises/bodyPartList")
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise ValueError("ExerciseDB bodyPartList response must be a list.")
+
+        exercises_by_external_id: dict[str, ProviderExercise] = {}
+        for body_part in payload:
+            if not isinstance(body_part, str) or not body_part:
+                continue
+            page_exercises = await self._list_paginated_exercises(
+                client,
+                f"/exercises/bodyPart/{quote(body_part, safe='')}",
+            )
+            for exercise in page_exercises:
+                exercises_by_external_id[exercise.external_id] = exercise
+
+        return list(exercises_by_external_id.values())
+
+    async def _list_paginated_exercises(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        first_response: httpx.Response | None = None,
+    ) -> list[ProviderExercise]:
+        """Fetch and normalize one paginated ExerciseDB list endpoint."""
+
+        exercises: list[ProviderExercise] = []
+        seen_external_ids: set[str] = set()
         offset = 0
         limit = self.settings.exercise_sync_page_size
-        retries = 0
-        async with httpx.AsyncClient(timeout=30) as client:
-            while True:
-                response = await client.get(
-                    f"{self.base_url}/exercises",
-                    headers=self.headers,
+
+        while True:
+            if first_response is not None and offset == 0:
+                response = first_response
+            else:
+                response = await self._get_with_retries(
+                    client,
+                    path,
                     params={"limit": limit, "offset": offset},
                 )
-                if response.status_code == 429:
-                    if retries >= self.settings.exercise_api_max_retries:
-                        response.raise_for_status()
-                    retry_after = self._retry_after_seconds(response.headers.get("retry-after"))
-                    await asyncio.sleep(retry_after)
-                    retries += 1
-                    continue
-                retries = 0
-                response.raise_for_status()
-                page = response.json()
-                if not page:
-                    break
-                for item in page:
-                    try:
-                        exercises.append(self._normalize(item))
-                    except Exception as exc:
-                        self.failures.append(
-                            {
-                                "external_id": item.get("exerciseId") or item.get("id"),
-                                "payload": item,
-                                "error": str(exc),
-                            }
-                        )
-                if len(page) < limit:
-                    break
-                offset += limit
+
+            response.raise_for_status()
+            page = response.json()
+            if not page:
+                break
+            if not isinstance(page, list):
+                raise ValueError("ExerciseDB exercise list response must be a list.")
+            new_count = 0
+            for item in page:
+                try:
+                    exercise = self._normalize(item)
+                    if exercise.external_id in seen_external_ids:
+                        continue
+                    seen_external_ids.add(exercise.external_id)
+                    exercises.append(exercise)
+                    new_count += 1
+                except Exception as exc:
+                    payload = item if isinstance(item, dict) else {"value": item}
+                    self.failures.append(
+                        {
+                            "external_id": payload.get("exerciseId") or payload.get("id"),
+                            "payload": payload,
+                            "error": str(exc),
+                        }
+                    )
+            if new_count == 0:
+                break
+            offset += len(page)
+
         return exercises
+
+    async def _get_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        params: dict[str, int] | None = None,
+    ) -> httpx.Response:
+        """GET one ExerciseDB endpoint with bounded 429 retry handling."""
+
+        retries = 0
+        while True:
+            response = await client.get(
+                f"{self.base_url}{path}",
+                headers=self.headers,
+                params=params,
+            )
+            if response.status_code != 429:
+                return response
+            if retries >= self.settings.exercise_api_max_retries:
+                response.raise_for_status()
+            retry_after = self._retry_after_seconds(response.headers.get("retry-after"))
+            await asyncio.sleep(retry_after)
+            retries += 1
 
     async def get_exercise(self, external_id: str) -> ProviderExercise | None:
         """Fetch a single ExerciseDB exercise by external ID."""
@@ -118,14 +192,15 @@ class ExerciseDBProvider(ExerciseProvider):
         name = item.get("name")
         if not external_id or not name:
             raise ValueError("ExerciseDB record is missing exerciseId/id or name.")
+        external_id = str(external_id)
         equipments = item.get("equipments") or []
         body_parts = item.get("bodyParts") or []
         target_muscles = item.get("targetMuscles") or []
         secondary_muscles = item.get("secondaryMuscles") or []
-        image_url = item.get("imageUrl")
+        image_url = item.get("imageUrl") or f"/api/exercise-images/{external_id}?resolution=180"
         video_url = item.get("videoUrl")
         return ProviderExercise(
-            external_id=str(external_id),
+            external_id=external_id,
             name=str(name),
             primary_muscle=titleish(target_muscles[0] if target_muscles else None),
             secondary_muscles=[titleish(muscle) or muscle for muscle in secondary_muscles],

@@ -10,6 +10,7 @@ from app.providers.factory import get_exercise_provider
 from app.providers.seed import SeedExerciseProvider
 from app.repositories import supabase_training as training_repository_module
 from app.repositories.supabase_training import TrainingRepository
+from app.routers import exercise_images
 from app.routers import admin
 from app.services import supabase as supabase_module
 from app.services.exercise_sync import safe_error_message
@@ -82,13 +83,94 @@ def test_exercisedb_provider_uses_credentials_when_available() -> None:
     assert isinstance(get_exercise_provider(settings), ExerciseDBProvider)
 
 
+@pytest.mark.asyncio
+async def test_exercisedb_provider_falls_back_to_body_part_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(
+        exercise_api_provider="exercisedb",
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+        exercise_sync_page_size=2,
+    )
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.statuses = [403, 200, 200, 200]
+    FakeAsyncClient.pages = [
+        [{"message": "not subscribed"}],
+        ["back"],
+        [
+            {
+                "exerciseId": "0001",
+                "name": "pull up",
+                "targetMuscles": ["lats"],
+                "bodyParts": ["back"],
+                "equipments": ["body weight"],
+            },
+            {
+                "exerciseId": "0002",
+                "name": "chin up",
+                "targetMuscles": ["lats"],
+                "bodyParts": ["back"],
+                "equipments": ["body weight"],
+            },
+        ],
+        [],
+    ]
+    monkeypatch.setattr("app.providers.exercisedb.httpx.AsyncClient", FakeAsyncClient)
+
+    provider = ExerciseDBProvider(settings)
+    exercises = await provider.list_exercises()
+
+    assert [exercise.name for exercise in exercises] == ["pull up", "chin up"]
+    assert FakeAsyncClient.requests[0]["url"] == "https://exercisedb.p.rapidapi.com/exercises"
+    assert FakeAsyncClient.requests[1]["url"] == "https://exercisedb.p.rapidapi.com/exercises/bodyPartList"
+    assert FakeAsyncClient.requests[2]["url"] == "https://exercisedb.p.rapidapi.com/exercises/bodyPart/back"
+
+
+@pytest.mark.asyncio
+async def test_exercise_image_proxy_streams_provider_gif(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+    )
+    FakeAsyncClient.requests = []
+    FakeAsyncClient.statuses = [200]
+    FakeAsyncClient.pages = [b"GIF89a"]
+    monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
+    monkeypatch.setattr("app.routers.exercise_images.httpx.AsyncClient", FakeAsyncClient)
+
+    response = await exercise_images.get_exercise_image("0001", "180")
+
+    assert response.media_type == "image/gif"
+    assert FakeAsyncClient.requests[0]["url"] == "https://exercisedb.p.rapidapi.com/image"
+    assert FakeAsyncClient.requests[0]["params"] == {"exerciseId": "0001", "resolution": "180"}
+
+
+@pytest.mark.asyncio
+async def test_exercise_image_proxy_rejects_invalid_ids() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await exercise_images.get_exercise_image("../0001", "180")
+
+    assert exc_info.value.status_code == 400
+
+
 class FakeResponse:
-    def __init__(self, payload: object, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: object,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.payload = payload
         self.status_code = status_code
+        self.headers = headers or {}
 
     def raise_for_status(self) -> None:
         return None
+
+    @property
+    def content(self) -> bytes:
+        return self.payload if isinstance(self.payload, bytes) else b""
 
     def json(self) -> object:
         return self.payload
@@ -97,6 +179,7 @@ class FakeResponse:
 class FakeAsyncClient:
     requests: list[dict[str, object]] = []
     pages: list[list[dict[str, object]]] = []
+    statuses: list[int] = []
     auth_payload: dict[str, object] = {"id": "user-1", "email": "user@example.com"}
     auth_status_code = 200
     closed = False
@@ -120,7 +203,8 @@ class FakeAsyncClient:
         self.requests.append({"url": url, "headers": headers or {}, "params": params or {}})
         if url.endswith("/auth/v1/user"):
             return FakeResponse(self.auth_payload, self.auth_status_code)
-        return FakeResponse(self.pages.pop(0))
+        status = self.statuses.pop(0) if self.statuses else 200
+        return FakeResponse(self.pages.pop(0), status)
 
     async def post(self, *args: object, **kwargs: object) -> FakeResponse:
         return FakeResponse([{"id": "row-1"}])

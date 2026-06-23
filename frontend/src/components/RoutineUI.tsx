@@ -15,12 +15,15 @@ import type { ElementType, ReactNode } from 'react'
 import type { Exercise, Routine, RoutineExercise } from '../lib/types'
 import {
   EmptyState,
+  FixedBottomActions,
   IconButton,
+  Input,
   LoadingSkeleton,
   PrimaryButton,
   SecondaryButton,
   SectionHeader,
   SurfaceCard,
+  Textarea,
   cn,
 } from './ui'
 
@@ -210,7 +213,7 @@ export function RoutineEditor({
   onExerciseFieldChange,
 }: RoutineEditorProps) {
   return (
-    <div className="space-y-5 pb-28">
+    <div className="space-y-5 pb-36">
       <SectionHeader
         title={title}
         subtitle="Routine name and at least one exercise are required."
@@ -219,8 +222,7 @@ export function RoutineEditor({
       <SurfaceCard className="space-y-4">
         <label className="block">
           <span className="mb-2 block text-sm font-medium text-text-secondary">Routine name</span>
-          <input
-            className="w-full rounded-xl border border-white/10 bg-surface-input px-3 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
+          <Input
             placeholder="Push Day"
             value={name}
             onChange={(event) => onNameChange(event.target.value)}
@@ -228,8 +230,7 @@ export function RoutineEditor({
         </label>
         <label className="block">
           <span className="mb-2 block text-sm font-medium text-text-secondary">Notes</span>
-          <textarea
-            className="min-h-[120px] w-full rounded-xl border border-white/10 bg-surface-input px-3 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
+          <Textarea
             placeholder="Optional notes"
             value={notes}
             onChange={(event) => onNotesChange(event.target.value)}
@@ -310,16 +311,14 @@ export function RoutineEditor({
         )}
       </div>
 
-      <div className="fixed inset-x-0 bottom-[calc(92px+env(safe-area-inset-bottom))] z-20 px-4 md:px-6">
-        <div className="mx-auto flex max-w-[760px] gap-3">
-          <SecondaryButton className="flex-1" onClick={onCancel}>
-            Cancel
-          </SecondaryButton>
-          <PrimaryButton className="flex-1" disabled={isSaving} onClick={onSave}>
-            {isSaving ? 'Saving...' : 'Save Routine'}
-          </PrimaryButton>
-        </div>
-      </div>
+      <FixedBottomActions>
+        <SecondaryButton className="flex-1" onClick={onCancel}>
+          Cancel
+        </SecondaryButton>
+        <PrimaryButton className="flex-1" disabled={isSaving} onClick={onSave}>
+          {isSaving ? 'Saving...' : 'Save Routine'}
+        </PrimaryButton>
+      </FixedBottomActions>
     </div>
   )
 }
@@ -357,9 +356,8 @@ function NumberField({ label, value, onChange }: { label: string; value: string;
   return (
     <label className="block">
       <span className="mb-2 block text-sm font-medium text-text-secondary">{label}</span>
-      <input
+      <Input
         inputMode="numeric"
-        className="w-full rounded-xl border border-white/10 bg-surface-input px-3 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
