@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Clock3, Dumbbell, Plus, TimerReset, Trash2, X } from 'lucide-react'
+import { CheckCircle2, Clock3, Dumbbell, Plus, Trash2, X } from 'lucide-react'
 import { mergeSetRpe, parseSetRpe } from '../lib/training'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 import { ExerciseSummary } from './ExerciseSummary'
-import { EmptyState, Field, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
+import { BottomSheet, EmptyState, Field, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
 
 type Props = {
   workout: Workout | null
@@ -23,6 +23,13 @@ type Props = {
 }
 
 const DEFAULT_REST_SECONDS = 90
+const REST_TIMER_STORAGE_KEY = 'strengthos:workout-rest-seconds'
+const REST_MINUTES = Array.from({ length: 60 }, (_, index) => index)
+const REST_SECONDS = Array.from({ length: 60 }, (_, index) => index)
+
+type RestTimerTarget =
+  | { kind: 'workout' }
+  | { kind: 'exercise'; workoutExerciseId: string; exerciseName: string | null }
 
 export function WorkoutLogger({
   workout,
@@ -49,11 +56,40 @@ export function WorkoutLogger({
   }, [sets])
   const [nameDraft, setNameDraft] = useState(workout?.name ?? '')
   const [notesDraft, setNotesDraft] = useState(workout?.notes ?? '')
+  const [workoutRestSeconds, setWorkoutRestSeconds] = useState(loadWorkoutRestSeconds)
+  const [exerciseRestSeconds, setExerciseRestSeconds] = useState<Map<string, number>>(() => new Map())
+  const [restTimerTarget, setRestTimerTarget] = useState<RestTimerTarget | null>(null)
 
   useEffect(() => {
     setNameDraft(workout?.name ?? '')
     setNotesDraft(workout?.notes ?? '')
   }, [workout?.id, workout?.name, workout?.notes])
+
+  useEffect(() => {
+    localStorage.setItem(REST_TIMER_STORAGE_KEY, String(workoutRestSeconds))
+  }, [workoutRestSeconds])
+
+  useEffect(() => {
+    setExerciseRestSeconds(new Map())
+  }, [workout?.id])
+
+  const selectedRestSeconds =
+    restTimerTarget?.kind === 'exercise'
+      ? exerciseRestSeconds.get(restTimerTarget.workoutExerciseId) ?? workoutRestSeconds
+      : workoutRestSeconds
+
+  function saveRestSeconds(seconds: number) {
+    if (restTimerTarget?.kind === 'exercise') {
+      setExerciseRestSeconds((current) => {
+        const next = new Map(current)
+        next.set(restTimerTarget.workoutExerciseId, seconds)
+        return next
+      })
+    } else {
+      setWorkoutRestSeconds(seconds)
+    }
+    setRestTimerTarget(null)
+  }
 
   if (!workout) {
     return (
@@ -99,6 +135,17 @@ export function WorkoutLogger({
               }}
             />
           </Field>
+          <button
+            type="button"
+            className="flex min-h-[52px] w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-surface-input px-3 py-3 text-left transition active:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card"
+            onClick={() => setRestTimerTarget({ kind: 'workout' })}
+          >
+            <span className="flex items-center gap-2 text-sm font-medium text-text-secondary">
+              <Clock3 className="h-4 w-4 text-accent-blue" aria-hidden="true" />
+              Default rest
+            </span>
+            <span className="font-semibold">{formatRestDuration(workoutRestSeconds)}</span>
+          </button>
         </SurfaceCard>
       </header>
 
@@ -115,6 +162,19 @@ export function WorkoutLogger({
                 if (exercise) onOpenExerciseDetails(exercise)
               }}
               onAddSet={() => onAddSet(item.id)}
+              workoutRestSeconds={workoutRestSeconds}
+              restSecondsOverride={exerciseRestSeconds.get(item.id) ?? null}
+              onChangeRestSeconds={() => {
+                const exercise = exerciseById.get(item.exercise_id)
+                setRestTimerTarget({ kind: 'exercise', workoutExerciseId: item.id, exerciseName: exercise?.name ?? null })
+              }}
+              onClearRestSeconds={() =>
+                setExerciseRestSeconds((current) => {
+                  const next = new Map(current)
+                  next.delete(item.id)
+                  return next
+                })
+              }
               onUpdateSet={onUpdateSet}
               onDeleteSet={onDeleteSet}
             />
@@ -137,6 +197,14 @@ export function WorkoutLogger({
           Finish Workout
         </PrimaryButton>
       </FixedBottomActions>
+
+      <RestDurationSheet
+        open={restTimerTarget !== null}
+        title={restTimerTarget?.kind === 'exercise' ? restTimerTarget.exerciseName ?? 'Exercise rest' : 'Default rest'}
+        value={selectedRestSeconds}
+        onClose={() => setRestTimerTarget(null)}
+        onSave={saveRestSeconds}
+      />
     </div>
   )
 }
@@ -169,6 +237,10 @@ export function ActiveWorkoutExerciseCard({
   sets,
   previousSets,
   onAddSet,
+  workoutRestSeconds,
+  restSecondsOverride,
+  onChangeRestSeconds,
+  onClearRestSeconds,
   onOpenDetails,
   onUpdateSet,
   onDeleteSet,
@@ -177,11 +249,20 @@ export function ActiveWorkoutExerciseCard({
   sets: WorkoutSet[]
   previousSets: WorkoutSet[]
   onAddSet: () => void
+  workoutRestSeconds: number
+  restSecondsOverride: number | null
+  onChangeRestSeconds: () => void
+  onClearRestSeconds: () => void
   onOpenDetails: () => void
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
 }) {
   const [restEndAt, setRestEndAt] = useState<number | null>(null)
+  const effectiveRestSeconds = restSecondsOverride ?? workoutRestSeconds
+
+  function startRestTimer() {
+    setRestEndAt(Date.now() + effectiveRestSeconds * 1000)
+  }
 
   return (
     <SurfaceCard className="space-y-4">
@@ -204,6 +285,27 @@ export function ActiveWorkoutExerciseCard({
         </IconButton>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-surface-input px-3 py-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">Rest {formatRestDuration(effectiveRestSeconds)}</div>
+          <div className="text-xs text-text-secondary">{restSecondsOverride === null ? 'Using workout default' : 'Custom for this exercise'}</div>
+        </div>
+        <div className="flex gap-2">
+          {restSecondsOverride === null ? null : (
+            <button type="button" className="rounded-full px-3 py-2 text-sm font-semibold text-text-secondary" onClick={onClearRestSeconds}>
+              Default
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded-full bg-surface-card px-4 py-2 text-sm font-semibold text-accent-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue"
+            onClick={onChangeRestSeconds}
+          >
+            Set
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-[2rem_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">
         <span>Set</span>
         <span>Previous</span>
@@ -221,17 +323,14 @@ export function ActiveWorkoutExerciseCard({
             previousSet={previousSets[index] ?? null}
             onUpdateSet={onUpdateSet}
             onDeleteSet={onDeleteSet}
+            onCompleteSet={startRestTimer}
           />
         ))}
       </div>
 
-      <div className="flex flex-wrap gap-3">
+      <div className="flex">
         <SecondaryButton className="flex-1" onClick={onAddSet}>
           Add Set
-        </SecondaryButton>
-        <SecondaryButton className="flex-1" onClick={() => setRestEndAt(Date.now() + DEFAULT_REST_SECONDS * 1000)}>
-          <TimerReset className="h-4 w-4" aria-hidden="true" />
-          Start Rest Timer
         </SecondaryButton>
       </div>
 
@@ -260,7 +359,7 @@ export function RestTimer({ endAt, onClear }: { endAt: number; onClear: () => vo
     <div className="flex items-center justify-between rounded-2xl border border-accent-done/20 bg-surface-success px-4 py-3 text-sm">
       <div>
         <div className="font-semibold text-accent-done">Rest timer running</div>
-        <div className="text-text-secondary">{seconds}s remaining</div>
+        <div className="text-text-secondary">{formatRestDuration(seconds)} remaining</div>
       </div>
       <button type="button" onClick={onClear} className="text-text-secondary">
         <X className="h-4 w-4" aria-hidden="true" />
@@ -274,11 +373,13 @@ export const SetRow = memo(function SetRow({
   previousSet,
   onUpdateSet,
   onDeleteSet,
+  onCompleteSet,
 }: {
   set: WorkoutSet
   previousSet: WorkoutSet | null
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
+  onCompleteSet: () => void
 }) {
   const [weightDraft, setWeightDraft] = useState(formatValue(set.weight))
   const [repsDraft, setRepsDraft] = useState(formatValue(set.reps))
@@ -313,6 +414,15 @@ export const SetRow = memo(function SetRow({
     const nextNotes = mergeSetRpe(set.notes, rpeDraft)
     if (nextNotes === set.notes) return
     onUpdateSet(set, { notes: nextNotes })
+  }
+
+  function toggleCompleted() {
+    const isCompleting = !set.is_completed
+    onUpdateSet(set, {
+      is_completed: isCompleting,
+      completed_at: isCompleting ? new Date().toISOString() : null,
+    })
+    if (isCompleting) onCompleteSet()
   }
 
   return (
@@ -361,16 +471,15 @@ export const SetRow = memo(function SetRow({
       />
       <button
         type="button"
-        className="touch-target rounded-xl bg-surface-card text-accent-done"
-        onClick={() =>
-          onUpdateSet(set, {
-            is_completed: !set.is_completed,
-            completed_at: !set.is_completed ? new Date().toISOString() : null,
-          })
-        }
+        className={cn(
+          'touch-target rounded-xl bg-surface-card transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue',
+          set.is_completed ? 'text-accent-done' : 'text-text-muted',
+        )}
+        onClick={toggleCompleted}
         aria-label={set.is_completed ? 'Mark set incomplete' : 'Mark set complete'}
+        aria-pressed={set.is_completed}
       >
-        <CheckCircle2 className="mx-auto h-5 w-5" aria-hidden="true" />
+        <CheckCircle2 className={cn('mx-auto h-5 w-5', !set.is_completed && 'opacity-45')} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -383,6 +492,97 @@ export const SetRow = memo(function SetRow({
     </div>
   )
 })
+
+function RestDurationSheet({
+  open,
+  title,
+  value,
+  onClose,
+  onSave,
+}: {
+  open: boolean
+  title: string
+  value: number
+  onClose: () => void
+  onSave: (seconds: number) => void
+}) {
+  const [minutes, setMinutes] = useState(() => Math.floor(value / 60))
+  const [seconds, setSeconds] = useState(() => value % 60)
+
+  useEffect(() => {
+    setMinutes(Math.floor(value / 60))
+    setSeconds(value % 60)
+  }, [value, open])
+
+  const nextSeconds = Math.max(1, minutes * 60 + seconds)
+
+  return (
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      title={title}
+      description="Scroll to choose minutes and seconds."
+      footer={
+        <div className="flex gap-3">
+          <SecondaryButton className="flex-1" onClick={onClose}>
+            Cancel
+          </SecondaryButton>
+          <PrimaryButton className="flex-1" onClick={() => onSave(nextSeconds)}>
+            Set
+          </PrimaryButton>
+        </div>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <RestWheel label="Min" value={minutes} values={REST_MINUTES} onChange={setMinutes} />
+        <RestWheel label="Sec" value={seconds} values={REST_SECONDS} onChange={setSeconds} />
+      </div>
+    </BottomSheet>
+  )
+}
+
+function RestWheel({
+  label,
+  value,
+  values,
+  onChange,
+}: {
+  label: string
+  value: number
+  values: number[]
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-center text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</span>
+      <select
+        className="scrollbar-hidden h-44 w-full rounded-2xl border border-white/10 bg-surface-input px-4 py-2 text-center text-2xl font-semibold text-text-primary focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
+        size={5}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      >
+        {values.map((item) => (
+          <option key={item} value={item}>
+            {String(item).padStart(2, '0')}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function loadWorkoutRestSeconds(): number {
+  const stored = localStorage.getItem(REST_TIMER_STORAGE_KEY)
+  const parsed = stored ? Number(stored) : DEFAULT_REST_SECONDS
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : DEFAULT_REST_SECONDS
+}
+
+function formatRestDuration(totalSeconds: number): string {
+  const normalizedSeconds = Math.max(0, Math.ceil(totalSeconds))
+  const minutes = Math.floor(normalizedSeconds / 60)
+  const seconds = normalizedSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
 
 function formatValue(value: number | null): string {
   return value === null ? '' : String(value)

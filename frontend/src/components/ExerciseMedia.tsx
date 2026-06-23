@@ -11,6 +11,8 @@ type ExerciseMediaProps = {
   decoding?: 'async' | 'auto' | 'sync'
 }
 
+const apiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
+
 export function ExerciseMedia({
   src,
   alt,
@@ -22,7 +24,7 @@ export function ExerciseMedia({
   decoding,
 }: ExerciseMediaProps) {
   const [failed, setFailed] = useState(false)
-  const mediaUrl = failed ? null : src
+  const mediaUrl = failed ? null : resolveMediaUrl(src)
   const isVideo = Boolean(mediaUrl && /\.(mp4|webm|mov)(\?|#|$)/i.test(mediaUrl))
 
   if (!mediaUrl) return fallback
@@ -46,4 +48,10 @@ export function ExerciseMedia({
       className={className}
     />
   )
+}
+
+function resolveMediaUrl(src: string | null): string | null {
+  if (!src) return null
+  if (apiUrl && src.startsWith('/api/')) return `${apiUrl}${src.slice('/api'.length)}`
+  return src
 }

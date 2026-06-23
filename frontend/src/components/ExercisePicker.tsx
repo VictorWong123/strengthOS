@@ -1,6 +1,6 @@
 import { Plus, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { expandSearch, normalizeSearch } from '../lib/search'
+import { createSearchIndex, exerciseSearchScore, type SearchIndex } from '../lib/search'
 import type { Exercise } from '../lib/types'
 import { ExerciseSummary } from './ExerciseSummary'
 import { EmptyState, IconButton, Input, SurfaceCard, cn } from './ui'
@@ -16,7 +16,7 @@ type Props = {
 
 type SearchableExercise = {
   exercise: Exercise
-  searchText: string
+  searchIndex: SearchIndex
 }
 
 type FilterKey = 'primary_muscle' | 'equipment'
@@ -31,12 +31,23 @@ export function ExercisePicker({
 }: Props) {
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState<Record<FilterKey, string>>({ primary_muscle: '', equipment: '' })
-  const terms = useMemo(() => expandSearch(query), [query])
   const searchableExercises = useMemo<SearchableExercise[]>(
     () =>
       exercises.map((exercise) => ({
         exercise,
-        searchText: normalizeSearch([exercise.name, exercise.primary_muscle, exercise.body_part, exercise.equipment].filter(Boolean).join(' ')),
+        searchIndex: createSearchIndex(
+          [
+            exercise.name,
+            exercise.normalized_name,
+            exercise.primary_muscle,
+            exercise.body_part,
+            exercise.equipment,
+            exercise.movement_category,
+            ...exercise.secondary_muscles,
+          ]
+            .filter(Boolean)
+            .join(' '),
+        ),
       })),
     [exercises],
   )
@@ -51,13 +62,20 @@ export function ExercisePicker({
 
   const filtered = useMemo(() => {
     const source = query.trim()
-      ? searchableExercises.filter(({ searchText }) => terms.some((term) => searchText.includes(term))).map(({ exercise }) => exercise)
+      ? searchableExercises
+          .map(({ exercise, searchIndex }) => ({
+            exercise,
+            score: exerciseSearchScore(query, searchIndex),
+          }))
+          .filter(({ score }) => score > 0)
+          .sort((left, right) => right.score - left.score || left.exercise.name.localeCompare(right.exercise.name))
+          .map(({ exercise }) => exercise)
       : exercises
     return source
       .filter((exercise) => !filters.primary_muscle || exercise.primary_muscle === filters.primary_muscle)
       .filter((exercise) => !filters.equipment || exercise.equipment === filters.equipment)
       .slice(0, 80)
-  }, [exercises, filters, query, searchableExercises, terms])
+  }, [exercises, filters, query, searchableExercises])
 
   return (
     <section className="space-y-4">

@@ -1,4 +1,4 @@
-import { House, type LucideIcon, UserRound, Dumbbell, X } from 'lucide-react'
+import { BarChart3, House, type LucideIcon, UserRound, Dumbbell, X } from 'lucide-react'
 import {
   useEffect,
   useId,
@@ -87,6 +87,7 @@ type FieldProps = {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home', href: '/', icon: House },
   { label: 'Workout', href: '/workout', icon: Dumbbell },
+  { label: 'Analytics', href: '/analytics', icon: BarChart3 },
   { label: 'Profile', href: '/profile', icon: UserRound },
 ]
 
@@ -137,7 +138,7 @@ export function BottomNavigation({ currentPath, onNavigate }: BottomNavigationPr
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(18px,env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-[760px] rounded-[24px] border border-white/10 bg-surface-card/95 px-2 py-2 shadow-panel backdrop-blur">
-        <ul className="grid grid-cols-3 gap-1">
+        <ul className="grid grid-cols-4 gap-1">
           {NAV_ITEMS.map(({ label, href, icon: Icon }) => {
             const active = currentPath === href || (href !== '/' && currentPath.startsWith(href))
             return (

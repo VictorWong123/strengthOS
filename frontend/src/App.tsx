@@ -13,6 +13,7 @@ import {
   Settings2,
   UserRound,
 } from 'lucide-react'
+import { AnalyticsPage } from './components/AnalyticsPage'
 import { AuthView } from './components/AuthView'
 import { ExerciseDetails } from './components/ExerciseDetails'
 import { ExercisePicker } from './components/ExercisePicker'
@@ -51,6 +52,7 @@ type Route =
   | { name: 'home'; pathname: '/' }
   | { name: 'workout'; pathname: '/workout' }
   | { name: 'active-workout'; pathname: '/workout/active' }
+  | { name: 'analytics'; pathname: '/analytics' }
   | { name: 'exercises'; pathname: '/exercises' }
   | { name: 'profile'; pathname: '/profile' }
   | { name: 'routine-new'; pathname: '/routines/new' }
@@ -248,7 +250,7 @@ export function App() {
       { data: routineRows, error: routineError },
     ] = await Promise.all([
       supabase.from('exercises').select(EXERCISE_COLUMNS).eq('is_active', true).order('name'),
-      supabase.from('workouts').select(WORKOUT_COLUMNS).order('started_at', { ascending: false }).limit(25),
+      supabase.from('workouts').select(WORKOUT_COLUMNS).order('started_at', { ascending: false }),
       supabase.from('routines').select(ROUTINE_COLUMNS).order('created_at', { ascending: false }),
     ])
 
@@ -1109,6 +1111,27 @@ export function App() {
           </div>
         )
 
+      case 'analytics':
+        return (
+          <div className="space-y-6">
+            <MobileHeader
+              title={<h1 className="text-3xl font-bold tracking-tight">Analytics</h1>}
+              subtitle="Workout frequency and exercise progression."
+            />
+            {renderBanners()}
+            {loadError && !isInitialLoading ? (
+              <ErrorState
+                icon={AlertTriangle}
+                title="Unable to load analytics"
+                description={loadError}
+                action={<SecondaryButton onClick={() => void loadData(true)}>Retry</SecondaryButton>}
+              />
+            ) : (
+              <AnalyticsPage exercises={exercises} workouts={workouts} workoutExercises={workoutExercises} sets={sets} />
+            )}
+          </div>
+        )
+
       case 'routine-new':
       case 'routine-edit':
         return (
@@ -1233,6 +1256,7 @@ export function App() {
 function parseRoute(pathname: string): Route {
   if (pathname === '/workout') return { name: 'workout', pathname }
   if (pathname === '/workout/active') return { name: 'active-workout', pathname }
+  if (pathname === '/analytics') return { name: 'analytics', pathname }
   if (pathname === '/exercises') return { name: 'exercises', pathname }
   if (pathname === '/profile') return { name: 'profile', pathname }
   if (pathname === '/routines/new') return { name: 'routine-new', pathname }
