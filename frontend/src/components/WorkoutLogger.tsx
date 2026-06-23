@@ -3,7 +3,7 @@ import { CheckCircle2, Clock3, Dumbbell, Plus, Trash2, X } from 'lucide-react'
 import { mergeSetRpe, parseSetRpe } from '../lib/training'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 import { ExerciseSummary } from './ExerciseSummary'
-import { BottomSheet, EmptyState, Field, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
+import { BottomSheet, ConfirmDialog, EmptyState, Field, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
 
 type Props = {
   workout: Workout | null
@@ -11,6 +11,7 @@ type Props = {
   sets: WorkoutSet[]
   exerciseById: Map<string, Exercise>
   previousSetsByExerciseId: Map<string, WorkoutSet[]>
+  historicalRecordsByExerciseId: Map<string, ExerciseRecord>
   onCreateWorkout: () => void
   onOpenExercisePicker: () => void
   onOpenExerciseDetails: (exercise: Exercise) => void
@@ -18,8 +19,21 @@ type Props = {
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
   onFinishWorkout: () => void
-  onLeaveWorkout: () => void
+  onDiscardWorkout: () => void
   onUpdateWorkout: (workout: Workout, patch: Partial<Workout>) => void
+}
+
+type ExerciseRecord = {
+  maxWeight: number
+  volume: number
+}
+
+type WorkoutPr = {
+  exerciseName: string
+  kind: 'Max Weight' | 'Volume'
+  value: number
+  previous: number
+  unit: string
 }
 
 const DEFAULT_REST_SECONDS = 90
@@ -37,6 +51,7 @@ export function WorkoutLogger({
   sets,
   exerciseById,
   previousSetsByExerciseId,
+  historicalRecordsByExerciseId,
   onCreateWorkout,
   onOpenExercisePicker,
   onOpenExerciseDetails,
@@ -44,7 +59,7 @@ export function WorkoutLogger({
   onUpdateSet,
   onDeleteSet,
   onFinishWorkout,
-  onLeaveWorkout,
+  onDiscardWorkout,
   onUpdateWorkout,
 }: Props) {
   const setsByWorkoutExercise = useMemo(() => {
@@ -59,6 +74,9 @@ export function WorkoutLogger({
   const [workoutRestSeconds, setWorkoutRestSeconds] = useState(loadWorkoutRestSeconds)
   const [exerciseRestSeconds, setExerciseRestSeconds] = useState<Map<string, number>>(() => new Map())
   const [restTimerTarget, setRestTimerTarget] = useState<RestTimerTarget | null>(null)
+  const [restEndAt, setRestEndAt] = useState<number | null>(null)
+  const [isFinishSheetOpen, setIsFinishSheetOpen] = useState(false)
+  const [isDiscardConfirmOpen, setIsDiscardConfirmOpen] = useState(false)
 
   useEffect(() => {
     setNameDraft(workout?.name ?? '')
@@ -71,6 +89,9 @@ export function WorkoutLogger({
 
   useEffect(() => {
     setExerciseRestSeconds(new Map())
+    setRestEndAt(null)
+    setIsFinishSheetOpen(false)
+    setIsDiscardConfirmOpen(false)
   }, [workout?.id])
 
   const selectedRestSeconds =
@@ -91,6 +112,10 @@ export function WorkoutLogger({
     setRestTimerTarget(null)
   }
 
+  function startRestTimer(seconds: number) {
+    setRestEndAt(Date.now() + seconds * 1000)
+  }
+
   if (!workout) {
     return (
       <EmptyState
@@ -106,14 +131,12 @@ export function WorkoutLogger({
     <div className="space-y-5 pb-36">
       <header className="grid gap-4">
         <div className="flex items-center justify-between gap-3">
-          <button type="button" onClick={onLeaveWorkout} className="text-sm font-medium text-text-secondary">
-            Cancel
-          </button>
           <WorkoutTimer startedAt={workout.started_at} />
-          <button type="button" onClick={onFinishWorkout} className="text-sm font-medium text-accent-blue">
+          <button type="button" onClick={() => setIsFinishSheetOpen(true)} className="text-sm font-medium text-accent-blue">
             Finish
           </button>
         </div>
+        {restEndAt ? <RestTimer endAt={restEndAt} onClear={() => setRestEndAt(null)} /> : null}
         <SurfaceCard className="space-y-4">
           <Field label="Workout name">
             <Input
@@ -164,17 +187,11 @@ export function WorkoutLogger({
               onAddSet={() => onAddSet(item.id)}
               workoutRestSeconds={workoutRestSeconds}
               restSecondsOverride={exerciseRestSeconds.get(item.id) ?? null}
+              onStartRestTimer={startRestTimer}
               onChangeRestSeconds={() => {
                 const exercise = exerciseById.get(item.exercise_id)
                 setRestTimerTarget({ kind: 'exercise', workoutExerciseId: item.id, exerciseName: exercise?.name ?? null })
               }}
-              onClearRestSeconds={() =>
-                setExerciseRestSeconds((current) => {
-                  const next = new Map(current)
-                  next.delete(item.id)
-                  return next
-                })
-              }
               onUpdateSet={onUpdateSet}
               onDeleteSet={onDeleteSet}
             />
@@ -193,10 +210,41 @@ export function WorkoutLogger({
         <SecondaryButton className="flex-1" onClick={onOpenExercisePicker}>
           Add Exercise
         </SecondaryButton>
-        <PrimaryButton className="flex-1" onClick={onFinishWorkout}>
+        <PrimaryButton className="flex-1" onClick={() => setIsFinishSheetOpen(true)}>
           Finish Workout
         </PrimaryButton>
       </FixedBottomActions>
+
+      <FinishWorkoutSheet
+        open={isFinishSheetOpen}
+        workout={workout}
+        workoutExercises={workoutExercises}
+        setsByWorkoutExercise={setsByWorkoutExercise}
+        exerciseById={exerciseById}
+        historicalRecordsByExerciseId={historicalRecordsByExerciseId}
+        onClose={() => setIsFinishSheetOpen(false)}
+        onSave={onFinishWorkout}
+        onDiscard={() => setIsDiscardConfirmOpen(true)}
+      />
+
+      <ConfirmDialog
+        open={isDiscardConfirmOpen}
+        onClose={() => setIsDiscardConfirmOpen(false)}
+        title="Discard workout?"
+        description="This permanently deletes this workout, its exercises, and its sets."
+        footer={
+          <div className="flex gap-3">
+            <SecondaryButton className="flex-1" onClick={() => setIsDiscardConfirmOpen(false)}>
+              Keep Editing
+            </SecondaryButton>
+            <PrimaryButton className="flex-1 bg-accent-danger active:bg-red-600" onClick={onDiscardWorkout}>
+              Discard
+            </PrimaryButton>
+          </div>
+        }
+      >
+        <p className="text-sm text-text-secondary">Saving keeps the workout in your history. Discarding cannot be undone.</p>
+      </ConfirmDialog>
 
       <RestDurationSheet
         open={restTimerTarget !== null}
@@ -239,8 +287,8 @@ export function ActiveWorkoutExerciseCard({
   onAddSet,
   workoutRestSeconds,
   restSecondsOverride,
+  onStartRestTimer,
   onChangeRestSeconds,
-  onClearRestSeconds,
   onOpenDetails,
   onUpdateSet,
   onDeleteSet,
@@ -251,18 +299,13 @@ export function ActiveWorkoutExerciseCard({
   onAddSet: () => void
   workoutRestSeconds: number
   restSecondsOverride: number | null
+  onStartRestTimer: (seconds: number) => void
   onChangeRestSeconds: () => void
-  onClearRestSeconds: () => void
   onOpenDetails: () => void
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
 }) {
-  const [restEndAt, setRestEndAt] = useState<number | null>(null)
   const effectiveRestSeconds = restSecondsOverride ?? workoutRestSeconds
-
-  function startRestTimer() {
-    setRestEndAt(Date.now() + effectiveRestSeconds * 1000)
-  }
 
   return (
     <SurfaceCard className="space-y-4">
@@ -280,29 +323,19 @@ export function ActiveWorkoutExerciseCard({
             <p className="mt-1 text-sm text-text-secondary">No equipment</p>
           </div>
         )}
-        <IconButton aria-label={`Add set to ${exercise?.name ?? 'exercise'}`} onClick={onAddSet}>
-          <Plus className="h-4 w-4" aria-hidden="true" />
-        </IconButton>
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-surface-input px-3 py-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold">Rest {formatRestDuration(effectiveRestSeconds)}</div>
-          <div className="text-xs text-text-secondary">{restSecondsOverride === null ? 'Using workout default' : 'Custom for this exercise'}</div>
-        </div>
-        <div className="flex gap-2">
-          {restSecondsOverride === null ? null : (
-            <button type="button" className="rounded-full px-3 py-2 text-sm font-semibold text-text-secondary" onClick={onClearRestSeconds}>
-              Default
-            </button>
-          )}
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            className="rounded-full bg-surface-card px-4 py-2 text-sm font-semibold text-accent-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-surface-input text-text-secondary transition active:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue"
+            aria-label={`Set rest for ${exercise?.name ?? 'exercise'} (${formatRestDuration(effectiveRestSeconds)})`}
+            title={`Rest ${formatRestDuration(effectiveRestSeconds)}`}
             onClick={onChangeRestSeconds}
           >
-            Set
+            <Clock3 className="h-4 w-4" aria-hidden="true" />
           </button>
+          <IconButton aria-label={`Add set to ${exercise?.name ?? 'exercise'}`} onClick={onAddSet}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+          </IconButton>
         </div>
       </div>
 
@@ -323,7 +356,7 @@ export function ActiveWorkoutExerciseCard({
             previousSet={previousSets[index] ?? null}
             onUpdateSet={onUpdateSet}
             onDeleteSet={onDeleteSet}
-            onCompleteSet={startRestTimer}
+            onCompleteSet={() => onStartRestTimer(effectiveRestSeconds)}
           />
         ))}
       </div>
@@ -333,9 +366,91 @@ export function ActiveWorkoutExerciseCard({
           Add Set
         </SecondaryButton>
       </div>
-
-      {restEndAt ? <RestTimer endAt={restEndAt} onClear={() => setRestEndAt(null)} /> : null}
     </SurfaceCard>
+  )
+}
+
+function FinishWorkoutSheet({
+  open,
+  workout,
+  workoutExercises,
+  setsByWorkoutExercise,
+  exerciseById,
+  historicalRecordsByExerciseId,
+  onClose,
+  onSave,
+  onDiscard,
+}: {
+  open: boolean
+  workout: Workout
+  workoutExercises: WorkoutExercise[]
+  setsByWorkoutExercise: Map<string, WorkoutSet[]>
+  exerciseById: Map<string, Exercise>
+  historicalRecordsByExerciseId: Map<string, ExerciseRecord>
+  onClose: () => void
+  onSave: () => void
+  onDiscard: () => void
+}) {
+  const summary = buildWorkoutSummary({
+    workout,
+    workoutExercises,
+    setsByWorkoutExercise,
+    exerciseById,
+    historicalRecordsByExerciseId,
+  })
+
+  return (
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      title="Finish Workout"
+      description="Review the session before saving."
+      footer={
+        <div className="grid gap-3">
+          <PrimaryButton onClick={onSave}>Save Workout</PrimaryButton>
+          <button type="button" className="min-h-11 text-sm font-semibold text-accent-danger" onClick={onDiscard}>
+            Discard Workout
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-3">
+          <SummaryMetric label="Lifted" value={`${formatNumber(summary.totalVolume)} lb`} />
+          <SummaryMetric label="Sets" value={String(summary.completedSets)} />
+          <SummaryMetric label="Time" value={formatDuration(summary.durationSeconds)} />
+        </div>
+
+        <div>
+          <h3 className="text-base font-semibold">Records</h3>
+          {summary.prs.length ? (
+            <div className="mt-3 space-y-2">
+              {summary.prs.map((pr) => (
+                <div key={`${pr.exerciseName}-${pr.kind}`} className="rounded-2xl border border-accent-done/20 bg-surface-success px-3 py-3">
+                  <div className="text-sm font-semibold text-accent-done">{pr.kind} PR</div>
+                  <div className="mt-1 text-sm">{pr.exerciseName}</div>
+                  <div className="mt-1 text-xs text-text-secondary">
+                    {formatNumber(pr.value)} {pr.unit}
+                    {pr.previous > 0 ? ` beat ${formatNumber(pr.previous)} ${pr.unit}` : ' first recorded PR'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 rounded-2xl bg-surface-input px-3 py-3 text-sm text-text-secondary">No new PRs this session.</p>
+          )}
+        </div>
+      </div>
+    </BottomSheet>
+  )
+}
+
+function SummaryMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-surface-input p-3">
+      <div className="text-xs font-medium uppercase text-text-muted">{label}</div>
+      <div className="mt-1 truncate text-lg font-semibold">{value}</div>
+    </div>
   )
 }
 
@@ -582,6 +697,80 @@ function formatRestDuration(totalSeconds: number): string {
   const minutes = Math.floor(normalizedSeconds / 60)
   const seconds = normalizedSeconds % 60
   return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function buildWorkoutSummary({
+  workout,
+  workoutExercises,
+  setsByWorkoutExercise,
+  exerciseById,
+  historicalRecordsByExerciseId,
+}: {
+  workout: Workout
+  workoutExercises: WorkoutExercise[]
+  setsByWorkoutExercise: Map<string, WorkoutSet[]>
+  exerciseById: Map<string, Exercise>
+  historicalRecordsByExerciseId: Map<string, ExerciseRecord>
+}) {
+  const prs: WorkoutPr[] = []
+  let totalVolume = 0
+  let completedSets = 0
+
+  for (const workoutExercise of workoutExercises) {
+    const exercise = exerciseById.get(workoutExercise.exercise_id)
+    const liftSets = (setsByWorkoutExercise.get(workoutExercise.id) ?? []).filter(isLiftSet)
+    if (!liftSets.length) continue
+
+    const exerciseVolume = liftSets.reduce((total, set) => total + (set.weight ?? 0) * (set.reps ?? 0), 0)
+    const maxWeight = Math.max(...liftSets.map((set) => set.weight ?? 0))
+    const previous = historicalRecordsByExerciseId.get(workoutExercise.exercise_id) ?? { maxWeight: 0, volume: 0 }
+    const exerciseName = exercise?.name ?? 'Exercise'
+
+    totalVolume += exerciseVolume
+    completedSets += liftSets.length
+
+    if (maxWeight > previous.maxWeight) {
+      prs.push({
+        exerciseName,
+        kind: 'Max Weight',
+        value: maxWeight,
+        previous: previous.maxWeight,
+        unit: 'lb',
+      })
+    }
+
+    if (exerciseVolume > previous.volume) {
+      prs.push({
+        exerciseName,
+        kind: 'Volume',
+        value: exerciseVolume,
+        previous: previous.volume,
+        unit: 'lb',
+      })
+    }
+  }
+
+  return {
+    totalVolume,
+    completedSets,
+    durationSeconds: Math.max(0, Math.round((Date.now() - new Date(workout.started_at).getTime()) / 1000)),
+    prs,
+  }
+}
+
+function isLiftSet(set: WorkoutSet): boolean {
+  return Boolean(set.is_completed && set.weight && set.reps)
+}
+
+function formatDuration(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
 }
 
 function formatValue(value: number | null): string {

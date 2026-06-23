@@ -1,38 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import {
-  AlertTriangle,
-  ChevronDown,
-  ClipboardPlus,
-  FolderPlus,
-  House,
-  ListRestart,
-  LogOut,
-  RefreshCw,
-  Search,
-  Settings2,
-  UserRound,
-} from 'lucide-react'
-import { AnalyticsPage } from './components/AnalyticsPage'
+import { ActiveWorkoutPage } from './components/ActiveWorkoutPage'
+import { AnalyticsRoutePage } from './components/AnalyticsRoutePage'
 import { AuthView } from './components/AuthView'
 import { ExerciseDetails } from './components/ExerciseDetails'
 import { ExercisePicker } from './components/ExercisePicker'
-import { RoutineActionList, RoutineCard, RoutineCardSkeleton, RoutineEditor, RoutineEmptyState, RoutineGroup, RoutineQuickAction } from './components/RoutineUI'
-import { WorkoutLogger } from './components/WorkoutLogger'
+import { ExercisesPage } from './components/ExercisesPage'
+import { HomePage } from './components/HomePage'
+import { ProfilePage } from './components/ProfilePage'
+import { RoutineEditorPage } from './components/RoutineEditorPage'
+import { RoutineActionList } from './components/RoutineUI'
+import { WorkoutPage } from './components/WorkoutPage'
 import {
   AppShell,
   BottomSheet,
   ConfirmDialog,
   DismissibleBanner,
-  EmptyState,
-  ErrorState,
-  IconButton,
-  MobileHeader,
-  Pill,
   PrimaryButton,
   SecondaryButton,
-  SectionHeader,
-  SurfaceCard,
 } from './components/ui'
 import { bestCompletedSet } from './lib/performance'
 import { supabase } from './lib/supabase'
@@ -155,6 +140,28 @@ export function App() {
       if (itemSets.length) {
         map.set(item.exercise_id, itemSets)
       }
+    }
+
+    return map
+  }, [setsByWorkoutExerciseId, workoutById, workoutExercises])
+
+  const historicalRecordsByExerciseId = useMemo(() => {
+    const map = new Map<string, { maxWeight: number; volume: number }>()
+
+    for (const item of workoutExercises) {
+      const workout = workoutById.get(item.workout_id)
+      if (!workout?.completed_at) continue
+
+      const completedSets = (setsByWorkoutExerciseId.get(item.id) ?? []).filter((set) => set.is_completed && set.weight && set.reps)
+      if (!completedSets.length) continue
+
+      const current = map.get(item.exercise_id) ?? { maxWeight: 0, volume: 0 }
+      const maxWeight = Math.max(...completedSets.map((set) => set.weight ?? 0))
+      const volume = completedSets.reduce((total, set) => total + (set.weight ?? 0) * (set.reps ?? 0), 0)
+      map.set(item.exercise_id, {
+        maxWeight: Math.max(current.maxWeight, maxWeight),
+        volume: Math.max(current.volume, volume),
+      })
     }
 
     return map
@@ -417,7 +424,7 @@ export function App() {
 
   async function addExerciseToWorkout(exercise: Exercise, navigateAfter = false) {
     const workout = activeWorkout ?? (await createWorkout('Workout'))
-    if (!workout) return
+    if (!workout) return false
 
     const { data, error } = await supabase
       .from('workout_exercises')
@@ -431,7 +438,7 @@ export function App() {
 
     if (error) {
       setStatus({ tone: 'danger', message: error.message })
-      return
+      return false
     }
 
     const workoutExercise = data as WorkoutExercise
@@ -440,6 +447,7 @@ export function App() {
     setStatus({ tone: 'success', message: `${exercise.name} added to workout.` })
 
     if (navigateAfter) navigate('/workout/active')
+    return true
   }
 
   async function startRoutineWorkout(routine: Routine) {
@@ -570,6 +578,32 @@ export function App() {
     navigate('/workout')
   }
 
+  async function discardWorkout() {
+    if (!activeWorkout) return
+
+    const workoutId = activeWorkout.id
+    const removedWorkoutExercises = workoutExercises.filter((item) => item.workout_id === workoutId)
+    const removedWorkoutExerciseIds = new Set(removedWorkoutExercises.map((item) => item.id))
+    const previousWorkout = activeWorkout
+    const previousSets = sets
+
+    setWorkouts((current) => current.filter((workout) => workout.id !== workoutId))
+    setWorkoutExercises((current) => current.filter((item) => item.workout_id !== workoutId))
+    setSets((current) => current.filter((set) => !removedWorkoutExerciseIds.has(set.workout_exercise_id)))
+
+    const { error } = await supabase.from('workouts').delete().eq('id', workoutId)
+    if (error) {
+      setWorkouts((current) => [previousWorkout, ...current])
+      setWorkoutExercises((current) => [...current, ...removedWorkoutExercises])
+      setSets(previousSets)
+      setStatus({ tone: 'danger', message: error.message })
+      return
+    }
+
+    setStatus({ tone: 'success', message: 'Workout discarded.' })
+    navigate('/workout')
+  }
+
   async function duplicateRoutine(routine: Routine) {
     const sourceExercises = routineExercisesByRoutineId.get(routine.id) ?? []
     const { data, error } = await supabase
@@ -670,15 +704,15 @@ export function App() {
     setPickerMode('workout')
   }
 
-  function handleExerciseSelected(exercise: Exercise) {
+  async function handleExerciseSelected(exercise: Exercise) {
     if (pickerMode === 'routine') {
       addExerciseToRoutineDraft(exercise)
       setPickerMode(null)
       return
     }
 
-    void addExerciseToWorkout(exercise, route.name !== 'exercises')
-    setPickerMode(null)
+    const added = await addExerciseToWorkout(exercise, true)
+    if (added) setPickerMode(null)
   }
 
   function addExerciseToRoutineDraft(exercise: Exercise) {
@@ -962,275 +996,117 @@ export function App() {
     switch (route.name) {
       case 'home':
         return (
-          <div className="space-y-6">
-            <MobileHeader
-              title={<h1 className="text-4xl font-bold tracking-tight">Home</h1>}
-              rightAction={
-                <IconButton aria-label="Open profile" onClick={() => navigate('/profile')}>
-                  <UserRound className="h-5 w-5" aria-hidden="true" />
-                </IconButton>
-              }
-            />
-            {renderBanners()}
-            <SurfaceCard>
-              <h2 className="text-xl font-semibold">Weekly Summary</h2>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <StatCard label="Completed" value={String(weeklyCompletedWorkouts.length)} />
-                <StatCard label="Routines" value={String(routines.length)} />
-                <StatCard label="Exercises" value={String(exercises.length)} />
-                <StatCard label="Best Set" value={personalRecord ? `${personalRecord.weight ?? 0} x ${personalRecord.reps ?? 0}` : 'None'} />
-              </div>
-            </SurfaceCard>
-            <SurfaceCard>
-              <h2 className="text-xl font-semibold">Recent Workout</h2>
-              <p className="mt-2 text-sm text-text-secondary">
-                {completedWorkouts[0]
-                  ? `${completedWorkouts[0].name} on ${new Date(completedWorkouts[0].completed_at ?? completedWorkouts[0].started_at).toLocaleDateString()}`
-                  : 'Finish a workout to see it here.'}
-              </p>
-            </SurfaceCard>
-          </div>
+          <HomePage
+            banners={renderBanners()}
+            weeklyCompletedWorkouts={weeklyCompletedWorkouts}
+            completedWorkouts={completedWorkouts}
+            routines={routines}
+            exerciseCount={exercises.length}
+            personalRecord={personalRecord}
+            onOpenProfile={() => navigate('/profile')}
+          />
         )
 
       case 'workout':
         return (
-          <div className="space-y-6">
-            <MobileHeader
-              title={
-                <button type="button" className="flex items-center gap-2 text-left">
-                  <h1 className="text-4xl font-bold tracking-tight">Workout</h1>
-                  <ChevronDown className="mt-1 h-5 w-5 text-text-secondary" aria-hidden="true" />
-                </button>
-              }
-              rightAction={
-                <IconButton aria-label="Workout settings" onClick={() => navigate('/profile')}>
-                  <Settings2 className="h-5 w-5" aria-hidden="true" />
-                </IconButton>
-              }
-            />
-            {renderBanners()}
-            <button
-              type="button"
-              onClick={() => void startEmptyWorkout()}
-              className="flex min-h-[64px] w-full items-center justify-start gap-3 rounded-card border border-white/10 bg-surface-card px-4 py-4 text-left text-lg font-semibold transition active:bg-surface-elevated"
-            >
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-input">
-                <ClipboardPlus className="h-5 w-5 text-accent-blue" aria-hidden="true" />
-              </div>
-              <span>Start Empty Workout</span>
-            </button>
-
-            <div className="space-y-4">
-              <SectionHeader
-                title="Routines"
-                action={
-                  <IconButton aria-label="Create routine" onClick={() => navigate('/routines/new')}>
-                    <FolderPlus className="h-5 w-5" aria-hidden="true" />
-                  </IconButton>
-                }
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <RoutineQuickAction icon={ClipboardPlus} title="New Routine" description="Build a saved template" onClick={() => navigate('/routines/new')} />
-                <RoutineQuickAction icon={Search} title="Explore" description="Browse exercise library" onClick={() => navigate('/exercises')} />
-              </div>
-            </div>
-
-            {showReorderHint ? (
-              <DismissibleBanner icon={ListRestart} tone="warning" onDismiss={dismissReorderHint}>
-                Press and hold a routine to reorder
-              </DismissibleBanner>
-            ) : null}
-
-            <RoutineGroup
-              title="My Routines"
-              count={orderedRoutines.length}
-              expanded={routineGroupExpanded}
-              onToggle={() => setRoutineGroupExpanded((current) => !current)}
-            >
-              {isInitialLoading ? (
-                <div className="space-y-3">
-                  <RoutineCardSkeleton />
-                  <RoutineCardSkeleton />
-                </div>
-              ) : loadError ? (
-                <ErrorState
-                  icon={AlertTriangle}
-                  title="Unable to load routines"
-                  description={loadError}
-                  action={
-                    <SecondaryButton onClick={() => void loadData(true)}>
-                      <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                      Retry
-                    </SecondaryButton>
-                  }
-                />
-              ) : orderedRoutines.length ? (
-                <div className="space-y-3">
-                  {orderedRoutines.map((routine) => (
-                    <RoutineCard
-                      key={routine.id}
-                      routine={routine}
-                      summary={routineSummary(routine.id)}
-                      onOpen={() => openRoutineForEdit(routine.id)}
-                      onOpenMenu={() => setSelectedRoutineId(routine.id)}
-                      onStart={() => void startRoutineWorkout(routine)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <RoutineEmptyState onCreate={() => navigate('/routines/new')} />
-              )}
-            </RoutineGroup>
-          </div>
+          <WorkoutPage
+            banners={renderBanners()}
+            routines={orderedRoutines}
+            routineGroupExpanded={routineGroupExpanded}
+            showReorderHint={showReorderHint}
+            isLoading={isInitialLoading}
+            loadError={loadError}
+            routineSummary={routineSummary}
+            onToggleRoutineGroup={() => setRoutineGroupExpanded((current) => !current)}
+            onDismissReorderHint={dismissReorderHint}
+            onRetry={() => void loadData(true)}
+            onNavigate={navigate}
+            onStartEmptyWorkout={() => void startEmptyWorkout()}
+            onOpenRoutine={openRoutineForEdit}
+            onOpenRoutineMenu={setSelectedRoutineId}
+            onStartRoutine={(routine) => void startRoutineWorkout(routine)}
+          />
         )
 
       case 'active-workout':
         return (
-          <div className="space-y-6">
-            <MobileHeader
-              title={<h1 className="text-3xl font-bold tracking-tight">Active Workout</h1>}
-              subtitle="Keep logging. Progress saves to the existing workout tables."
-            />
-            {renderBanners()}
-            <WorkoutLogger
-              workout={activeWorkout}
-              workoutExercises={activeWorkoutExercises}
-              sets={activeWorkoutSets}
-              exerciseById={exerciseById}
-              previousSetsByExerciseId={previousSetsByExerciseId}
-              onCreateWorkout={() => void startEmptyWorkout()}
-              onOpenExercisePicker={openWorkoutPicker}
-              onOpenExerciseDetails={(exercise) => openExerciseDetails(exercise, 'active-workout')}
-              onAddSet={(workoutExerciseId) => void addSet(workoutExerciseId)}
-              onUpdateSet={(set, patch) => void updateSet(set, patch)}
-              onDeleteSet={(set) => void deleteSet(set)}
-              onFinishWorkout={() => void finishWorkout()}
-              onLeaveWorkout={() => navigate('/workout')}
-              onUpdateWorkout={(workout, patch) => void updateWorkout(workout, patch)}
-            />
-          </div>
+          <ActiveWorkoutPage
+            banners={renderBanners()}
+            workout={activeWorkout}
+            workoutExercises={activeWorkoutExercises}
+            sets={activeWorkoutSets}
+            exerciseById={exerciseById}
+            previousSetsByExerciseId={previousSetsByExerciseId}
+            historicalRecordsByExerciseId={historicalRecordsByExerciseId}
+            onCreateWorkout={() => void startEmptyWorkout()}
+            onOpenExercisePicker={openWorkoutPicker}
+            onOpenExerciseDetails={(exercise) => openExerciseDetails(exercise, 'active-workout')}
+            onAddSet={(workoutExerciseId) => void addSet(workoutExerciseId)}
+            onUpdateSet={(set, patch) => void updateSet(set, patch)}
+            onDeleteSet={(set) => void deleteSet(set)}
+            onFinishWorkout={() => void finishWorkout()}
+            onDiscardWorkout={() => void discardWorkout()}
+            onUpdateWorkout={(workout, patch) => void updateWorkout(workout, patch)}
+          />
         )
 
       case 'analytics':
         return (
-          <div className="space-y-6">
-            <MobileHeader
-              title={<h1 className="text-3xl font-bold tracking-tight">Analytics</h1>}
-              subtitle="Workout frequency and exercise progression."
-            />
-            {renderBanners()}
-            {loadError && !isInitialLoading ? (
-              <ErrorState
-                icon={AlertTriangle}
-                title="Unable to load analytics"
-                description={loadError}
-                action={<SecondaryButton onClick={() => void loadData(true)}>Retry</SecondaryButton>}
-              />
-            ) : (
-              <AnalyticsPage exercises={exercises} workouts={workouts} workoutExercises={workoutExercises} sets={sets} />
-            )}
-          </div>
+          <AnalyticsRoutePage
+            banners={renderBanners()}
+            exercises={exercises}
+            workouts={workouts}
+            workoutExercises={workoutExercises}
+            sets={sets}
+            isLoading={isInitialLoading}
+            loadError={loadError}
+            onRetry={() => void loadData(true)}
+          />
         )
 
       case 'routine-new':
       case 'routine-edit':
         return (
-          <div className="space-y-6">
-            <MobileHeader
-              title={<h1 className="text-3xl font-bold tracking-tight">{route.name === 'routine-new' ? 'New Routine' : 'Edit Routine'}</h1>}
-              leftAction={
-                <button type="button" onClick={() => navigate('/workout')} className="text-sm font-medium text-text-secondary">
-                  Back
-                </button>
-              }
-            />
-            {renderBanners()}
-            {routineDraft ? (
-              <RoutineEditor
-                title={routineDraft.title}
-                name={routineDraft.name}
-                notes={routineDraft.notes}
-                exercises={routineDraft.exercises}
-                validationError={routineValidationError}
-                isSaving={isSavingRoutine}
-                onNameChange={(value) => setRoutineDraft((current) => (current ? { ...current, name: value } : current))}
-                onNotesChange={(value) => setRoutineDraft((current) => (current ? { ...current, notes: value } : current))}
-                onAddExercise={openRoutinePicker}
-                onSave={() => void saveRoutine()}
-                onCancel={() => navigate('/workout')}
-                onRemoveExercise={removeRoutineExercise}
-                onMoveExercise={moveRoutineExercise}
-                onExerciseFieldChange={updateRoutineExerciseField}
-              />
-            ) : (
-              <EmptyState
-                icon={ClipboardPlus}
-                title="Preparing routine editor"
-                description="Routine data will appear once loading finishes."
-              />
-            )}
-          </div>
+          <RoutineEditorPage
+            mode={route.name === 'routine-new' ? 'new' : 'edit'}
+            banners={renderBanners()}
+            draft={routineDraft}
+            validationError={routineValidationError}
+            isSaving={isSavingRoutine}
+            onBack={() => navigate('/workout')}
+            onNameChange={(value) => setRoutineDraft((current) => (current ? { ...current, name: value } : current))}
+            onNotesChange={(value) => setRoutineDraft((current) => (current ? { ...current, notes: value } : current))}
+            onAddExercise={openRoutinePicker}
+            onSave={() => void saveRoutine()}
+            onCancel={() => navigate('/workout')}
+            onRemoveExercise={removeRoutineExercise}
+            onMoveExercise={moveRoutineExercise}
+            onExerciseFieldChange={updateRoutineExerciseField}
+          />
         )
 
       case 'exercises':
         return (
-          <div className="space-y-6">
-            <MobileHeader
-              title={<h1 className="text-3xl font-bold tracking-tight">Exercises</h1>}
-              leftAction={
-                <button type="button" onClick={() => navigate('/workout')} className="text-sm font-medium text-text-secondary">
-                  Back
-                </button>
-              }
-            />
-            {renderBanners()}
-            {loadError && !isInitialLoading ? (
-              <ErrorState
-                icon={AlertTriangle}
-                title="Unable to load exercises"
-                description={loadError}
-                action={<SecondaryButton onClick={() => void loadData(true)}>Retry</SecondaryButton>}
-              />
-            ) : (
-              <ExercisePicker
-                exercises={exercises}
-                isLoading={isInitialLoading}
-                actionLabel="Add"
-                stickyTopClassName="top-[calc(96px+env(safe-area-inset-top))]"
-                onSelect={(exercise) => void addExerciseToWorkout(exercise, true)}
-                onOpenDetails={(exercise) => openExerciseDetails(exercise, 'library')}
-              />
-            )}
-          </div>
+          <ExercisesPage
+            banners={renderBanners()}
+            exercises={exercises}
+            isLoading={isInitialLoading}
+            loadError={loadError}
+            onBack={() => navigate('/workout')}
+            onRetry={() => void loadData(true)}
+            onSelect={(exercise) => void addExerciseToWorkout(exercise, true)}
+            onOpenDetails={(exercise) => openExerciseDetails(exercise, 'library')}
+          />
         )
 
       case 'profile':
         return (
-          <div className="space-y-6">
-            <MobileHeader
-              title={<h1 className="text-3xl font-bold tracking-tight">Profile</h1>}
-              rightAction={
-                <IconButton aria-label="Go home" onClick={() => navigate('/')}>
-                  <House className="h-5 w-5" aria-hidden="true" />
-                </IconButton>
-              }
-            />
-            {renderBanners()}
-            <SurfaceCard className="space-y-4">
-              <div>
-                <h2 className="text-xl font-semibold">Account</h2>
-                <p className="mt-2 text-sm text-text-secondary">{session?.user.email ?? ''}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Pill>Weight units: lb</Pill>
-                <Pill>Default rest timer: 90s</Pill>
-              </div>
-              <SecondaryButton onClick={() => supabase.auth.signOut()}>
-                <LogOut className="h-4 w-4" aria-hidden="true" />
-                Logout
-              </SecondaryButton>
-            </SurfaceCard>
-          </div>
+          <ProfilePage
+            session={session}
+            banners={renderBanners()}
+            onNavigate={navigate}
+            onStatus={setStatus}
+          />
         )
     }
   }
@@ -1376,13 +1252,4 @@ function buildDraftRoutineExercise(item: RoutineExercise, exercise: Exercise | n
     maxReps: target.maxReps,
     targetRpe: target.rpe,
   }
-}
-
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl bg-surface-input p-3">
-      <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
-      <div className="mt-1 text-xl font-semibold">{value}</div>
-    </div>
-  )
 }
