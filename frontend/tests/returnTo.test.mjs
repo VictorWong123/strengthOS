@@ -10,7 +10,7 @@ const transpiled = ts.transpileModule(source, {
   },
 }).outputText
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString('base64')}`
-const { getSafeReturnTo, getSafeReturnToFromSearch } = await import(moduleUrl)
+const { getSafeReturnTo, getSafeReturnToFromSearch, resolveReturnToFromSearch } = await import(moduleUrl)
 
 const origin = 'https://strength-os-nu.vercel.app'
 
@@ -23,6 +23,13 @@ assert.equal(
   getSafeReturnToFromSearch('?returnTo=%2Foauth%2Fconsent%3Fauthorization_id%3Dauth-123', origin),
   '/oauth/consent?authorization_id=auth-123',
 )
+
+assert.deepEqual(resolveReturnToFromSearch('?returnTo=%2Foauth%2Fconsent%3Fauthorization_id%3Dauth-123', origin), {
+  rawSearch: '?returnTo=%2Foauth%2Fconsent%3Fauthorization_id%3Dauth-123',
+  rawReturnTo: '%2Foauth%2Fconsent%3Fauthorization_id%3Dauth-123',
+  parsedReturnTo: '/oauth/consent?authorization_id=auth-123',
+  validatedReturnTo: '/oauth/consent?authorization_id=auth-123',
+})
 
 assert.equal(getSafeReturnToFromSearch('', origin), '/')
 assert.equal(getSafeReturnTo('//evil.example/path', origin), '/')

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Dumbbell } from 'lucide-react'
-import { getSafeReturnToFromSearch } from '../lib/returnTo'
+import { assignReturnToAfterAuth, logAuthEvent } from '../lib/authRedirect'
 import { supabase } from '../lib/supabase'
 import { Button, Card, Input } from './ui'
 
@@ -12,27 +12,32 @@ export function AuthView() {
   const hasNavigatedAfterAuth = useRef(false)
 
   useEffect(() => {
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) navigateToReturnTo()
+    logAuthEvent('AuthView mounted')
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      logAuthEvent('onAuthStateChange event', { event, hasSession: Boolean(session) })
+      if (session) navigateToReturnTo('AuthView.onAuthStateChange')
     })
 
     return () => data.subscription.unsubscribe()
   }, [])
 
-  function navigateToReturnTo() {
+  function navigateToReturnTo(source: 'AuthView.signIn' | 'AuthView.onAuthStateChange') {
     if (hasNavigatedAfterAuth.current) return
     hasNavigatedAfterAuth.current = true
-    window.location.assign(getSafeReturnToFromSearch())
+    assignReturnToAfterAuth(source)
   }
 
   async function signIn() {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    logAuthEvent('signInWithPassword start')
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
+      logAuthEvent('signInWithPassword error', { status: error.status, code: error.code })
       setMessage(error.message)
       return
     }
+    logAuthEvent('signInWithPassword success', { hasSession: Boolean(data.session), hasUser: Boolean(data.user) })
     setMessage('')
-    navigateToReturnTo()
+    navigateToReturnTo('AuthView.signIn')
   }
 
   async function signUp() {

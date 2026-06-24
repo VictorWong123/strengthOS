@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { ActiveWorkoutPage } from './components/ActiveWorkoutPage'
 import { AnalyticsRoutePage } from './components/AnalyticsRoutePage'
@@ -20,8 +20,8 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from './components/ui'
+import { assignReturnToAfterAuth, logAuthEvent } from './lib/authRedirect'
 import { bestCompletedSet } from './lib/performance'
-import { getSafeReturnToFromSearch } from './lib/returnTo'
 import { supabase } from './lib/supabase'
 import { formatRoutineTarget, parseRoutineTarget } from './lib/training'
 import type { Exercise, Routine, RoutineExercise, Workout, WorkoutExercise, WorkoutSet } from './lib/types'
@@ -75,6 +75,7 @@ type RoutineDraft = {
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
+  const [isAuthLoading, setIsAuthLoading] = useState(true)
   const [pathname, setPathname] = useState(() => window.location.pathname)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -184,9 +185,27 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
-    return () => data.subscription.unsubscribe()
+    let mounted = true
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return
+        setSession(data.session)
+        setIsAuthLoading(false)
+      })
+      .catch(() => {
+        if (!mounted) return
+        setSession(null)
+        setIsAuthLoading(false)
+      })
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession)
+      setIsAuthLoading(false)
+    })
+    return () => {
+      mounted = false
+      data.subscription.unsubscribe()
+    }
   }, [])
 
   useEffect(() => {
@@ -394,12 +413,12 @@ export function App() {
     setSelectedExerciseSets((setRows ?? []) as WorkoutSet[])
   }
 
-  function navigate(nextPath: string) {
+  const navigate = useCallback((nextPath: string) => {
     if (nextPath === pathname) return
     window.history.pushState({}, '', nextPath)
     setPathname(nextPath)
     window.scrollTo({ top: 0, behavior: 'auto' })
-  }
+  }, [pathname])
 
   async function createWorkout(name = 'Workout'): Promise<Workout | null> {
     if (!session) return null
@@ -900,14 +919,14 @@ export function App() {
 
   const routineActionTarget = selectedRoutineId ? orderedRoutines.find((routine) => routine.id === selectedRoutineId) ?? null : null
 
-  if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} onNavigate={navigate} />
+  if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} isAuthLoading={isAuthLoading} onNavigate={navigate} />
   if (session && route.name === 'login') {
-    window.location.assign(getSafeReturnToFromSearch())
-    return null
+    return <LoginSessionRedirect />
   }
-  if (!session) {
+  if (!session && !isAuthLoading) {
     return <AuthView />
   }
+  if (!session) return null
 
   return (
     <AppShell currentPath={route.pathname} onNavigate={navigate}>
@@ -1138,6 +1157,19 @@ export function App() {
       </div>
     )
   }
+}
+
+function LoginSessionRedirect() {
+  const hasRedirected = useRef(false)
+
+  useEffect(() => {
+    if (hasRedirected.current) return
+    hasRedirected.current = true
+    logAuthEvent('App login session guard redirect')
+    assignReturnToAfterAuth('App.loginSessionGuard')
+  }, [])
+
+  return null
 }
 
 function parseRoute(pathname: string): Route {

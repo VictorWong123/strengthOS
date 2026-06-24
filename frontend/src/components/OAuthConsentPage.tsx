@@ -27,6 +27,7 @@ type OAuthRedirect = {
 
 type OAuthConsentPageProps = {
   session: Session | null
+  isAuthLoading: boolean
   onNavigate: (path: string) => void
 }
 
@@ -36,7 +37,7 @@ type PageState =
   | { name: 'error'; message: string }
   | { name: 'ready'; details: AuthorizationDetails }
 
-export function OAuthConsentPage({ session, onNavigate }: OAuthConsentPageProps) {
+export function OAuthConsentPage({ session, isAuthLoading, onNavigate }: OAuthConsentPageProps) {
   const [state, setState] = useState<PageState>({ name: 'loading' })
   const [decisionPending, setDecisionPending] = useState<'allow' | 'deny' | null>(null)
   const authorizationId = new URLSearchParams(window.location.search).get('authorization_id')
@@ -47,6 +48,11 @@ export function OAuthConsentPage({ session, onNavigate }: OAuthConsentPageProps)
     async function loadAuthorizationDetails() {
       if (!authorizationId) {
         setState({ name: 'missing-id' })
+        return
+      }
+
+      if (isAuthLoading) {
+        setState({ name: 'loading' })
         return
       }
 
@@ -82,7 +88,7 @@ export function OAuthConsentPage({ session, onNavigate }: OAuthConsentPageProps)
     return () => {
       cancelled = true
     }
-  }, [authorizationId, session])
+  }, [authorizationId, isAuthLoading, session, onNavigate])
 
   async function decide(decision: 'allow' | 'deny') {
     if (!authorizationId) return
