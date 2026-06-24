@@ -5,7 +5,7 @@ strengthOS is a dark, mobile-first workout tracker. Supabase PostgreSQL is the o
 ## Architecture
 
 - Frontend: React, TypeScript, Tailwind CSS, Vite, and Vercel.
-- Backend: FastAPI and FastMCP on Render.
+- Backend: FastAPI and FastMCP on a Render web service.
 - Database/Auth: Supabase PostgreSQL and Supabase Auth.
 - Exercise data: ExerciseDB synchronization directly into Supabase.
 
@@ -149,7 +149,12 @@ Run locally:
 docker run --env-file .env -p 8000:8000 strengthos-backend
 ```
 
-Deploy the backend to Render by importing this repo as a Blueprint. Render reads `render.yaml`, builds `backend/Dockerfile`, exposes `/health`, and serves `/mcp` from the same FastAPI process. The container starts with:
+Deploy the backend to Render as a Web Service. Either:
+
+- Leave the root directory at the repo root and use the root `Dockerfile`, or
+- Set the root directory to `backend` and use `backend/Dockerfile`.
+
+The container starts with:
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

@@ -3,12 +3,12 @@
 This repo is ready for a split deployment:
 
 - Frontend: Vercel, imported from `frontend/`.
-- Backend: Render, imported from the repo root with `render.yaml`.
+- Backend: Render web service, imported from the repo root using the root `Dockerfile`, or from `backend/` using `backend/Dockerfile`.
 - Database and auth: Supabase.
 
 ## Why Render for the backend
 
-Use Render for the MVP backend. The backend is a long-running FastAPI/FastMCP Docker service, and ChatGPT needs a stable HTTPS `/mcp` endpoint with streaming behavior. Render imports GitHub repos directly, supports Docker from a monorepo root, gives automatic TLS, health checks, logs, and simple environment variable management.
+Use Render for the MVP backend. The backend is a long-running FastAPI/FastMCP Docker service, and ChatGPT needs a stable HTTPS `/mcp` endpoint with streaming behavior. Render web services support Docker, automatic TLS, health checks, logs, and simple environment variable management.
 
 Cloud Run is also a good production platform, but it adds more IAM, artifact registry, and deployment setup. For this MVP, Render is the fastest path from pushed repo to a usable backend URL.
 
@@ -27,10 +27,13 @@ Do not expose `SUPABASE_SERVICE_ROLE_KEY` outside the backend host.
 ## Backend on Render
 
 1. Push this repo to GitHub.
-2. In Render, choose **New +** -> **Blueprint**.
-3. Select this repo. Render will read `render.yaml`.
-4. Create the `strengthos-backend` service.
-5. Fill these secret environment variables:
+2. In Render, choose **New +** -> **Web Service**.
+3. Connect this repo.
+4. Set the environment to `Docker`.
+5. Use one of these two valid layouts:
+   - Repo root: leave the root directory empty and use the root `Dockerfile`.
+   - Backend subdir: set root directory to `backend` and use `backend/Dockerfile`.
+6. Fill these secret environment variables:
 
 ```text
 SUPABASE_URL=
