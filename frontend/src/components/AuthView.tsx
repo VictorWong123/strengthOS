@@ -1,14 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import { Dumbbell } from 'lucide-react'
+import { getSafeReturnTo } from '../lib/returnTo'
 import { supabase } from '../lib/supabase'
 import { Button, Card, Input } from './ui'
 
-type AuthViewProps = {
-  returnTo?: string
-  onAuthenticated?: (path: string) => void
-}
-
-export function AuthView({ returnTo = '/', onAuthenticated }: AuthViewProps) {
+export function AuthView() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
@@ -21,7 +17,8 @@ export function AuthView({ returnTo = '/', onAuthenticated }: AuthViewProps) {
       return
     }
     setMessage('')
-    onAuthenticated?.(returnTo)
+    const returnTo = getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo'))
+    window.location.assign(returnTo)
   }
 
   async function signUp() {

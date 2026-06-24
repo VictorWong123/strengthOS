@@ -196,12 +196,6 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (session && route.name === 'login') {
-      navigate(getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo')))
-    }
-  }, [route.name, session])
-
-  useEffect(() => {
     const onOnline = () => setIsOnline(true)
     const onOffline = () => setIsOnline(false)
     window.addEventListener('online', onOnline)
@@ -907,9 +901,12 @@ export function App() {
   const routineActionTarget = selectedRoutineId ? orderedRoutines.find((routine) => routine.id === selectedRoutineId) ?? null : null
 
   if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} onNavigate={navigate} />
+  if (session && route.name === 'login') {
+    window.location.assign(getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo')))
+    return null
+  }
   if (!session) {
-    const returnTo = route.name === 'login' ? getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo')) : '/'
-    return <AuthView returnTo={returnTo} onAuthenticated={navigate} />
+    return <AuthView />
   }
 
   return (
