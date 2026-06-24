@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Dumbbell } from 'lucide-react'
-import { getSafeReturnTo } from '../lib/returnTo'
+import { getSafeReturnToFromSearch } from '../lib/returnTo'
 import { supabase } from '../lib/supabase'
 import { Button, Card, Input } from './ui'
 
@@ -9,6 +9,21 @@ export function AuthView() {
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in')
+  const hasNavigatedAfterAuth = useRef(false)
+
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) navigateToReturnTo()
+    })
+
+    return () => data.subscription.unsubscribe()
+  }, [])
+
+  function navigateToReturnTo() {
+    if (hasNavigatedAfterAuth.current) return
+    hasNavigatedAfterAuth.current = true
+    window.location.assign(getSafeReturnToFromSearch())
+  }
 
   async function signIn() {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -17,8 +32,7 @@ export function AuthView() {
       return
     }
     setMessage('')
-    const returnTo = getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo'))
-    window.location.assign(returnTo)
+    navigateToReturnTo()
   }
 
   async function signUp() {

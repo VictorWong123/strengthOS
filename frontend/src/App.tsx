@@ -21,7 +21,7 @@ import {
   SecondaryButton,
 } from './components/ui'
 import { bestCompletedSet } from './lib/performance'
-import { getSafeReturnTo } from './lib/returnTo'
+import { getSafeReturnToFromSearch } from './lib/returnTo'
 import { supabase } from './lib/supabase'
 import { formatRoutineTarget, parseRoutineTarget } from './lib/training'
 import type { Exercise, Routine, RoutineExercise, Workout, WorkoutExercise, WorkoutSet } from './lib/types'
@@ -902,7 +902,7 @@ export function App() {
 
   if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} onNavigate={navigate} />
   if (session && route.name === 'login') {
-    window.location.assign(getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo')))
+    window.location.assign(getSafeReturnToFromSearch())
     return null
   }
   if (!session) {
