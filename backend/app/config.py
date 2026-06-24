@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     exercise_api_max_retry_delay_seconds: int = Field(default=30, ge=1, le=300)
     frontend_url: str = "http://localhost:5173"
     frontend_origin: str = ""
+    backend_public_url: str = ""
     admin_api_key: SecretStr = SecretStr("")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

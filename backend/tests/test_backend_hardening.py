@@ -10,8 +10,7 @@ from app.providers.factory import get_exercise_provider
 from app.providers.seed import SeedExerciseProvider
 from app.repositories import supabase_training as training_repository_module
 from app.repositories.supabase_training import TrainingRepository
-from app.routers import exercise_images
-from app.routers import admin
+from app.routers import admin, exercise_images, oauth_metadata
 from app.services import supabase as supabase_module
 from app.services.exercise_sync import safe_error_message
 from app.services.supabase import SupabaseService
@@ -340,6 +339,26 @@ def test_settings_preserves_legacy_frontend_origin() -> None:
         "https://new.example",
         "https://old.example",
     ]
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_metadata_uses_public_backend_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(
+        backend_public_url="https://api.example.com/",
+        frontend_url="https://app.example.com",
+    )
+    monkeypatch.setattr(oauth_metadata, "get_settings", lambda: settings)
+
+    metadata = await oauth_metadata.oauth_protected_resource(object())
+
+    assert metadata == {
+        "resource": "https://api.example.com/mcp",
+        "authorization_servers": ["https://example.supabase.co/auth/v1"],
+        "scopes_supported": ["openid", "email", "profile"],
+        "resource_documentation": "https://app.example.com",
+    }
 
 
 @pytest.mark.asyncio

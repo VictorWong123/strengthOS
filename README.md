@@ -5,7 +5,7 @@ strengthOS is a dark, mobile-first workout tracker. Supabase PostgreSQL is the o
 ## Architecture
 
 - Frontend: React, TypeScript, Tailwind CSS, Vite, and Vercel.
-- Backend: FastAPI and FastMCP on Google Cloud Run.
+- Backend: FastAPI and FastMCP on Render.
 - Database/Auth: Supabase PostgreSQL and Supabase Auth.
 - Exercise data: ExerciseDB synchronization directly into Supabase.
 
@@ -28,6 +28,8 @@ SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 FRONTEND_URL=http://localhost:5173
+FRONTEND_ORIGIN=
+BACKEND_PUBLIC_URL=http://localhost:8000
 EXERCISE_API_PROVIDER=seed
 EXERCISE_API_KEY=
 EXERCISE_API_HOST=exercisedb.p.rapidapi.com
@@ -39,6 +41,8 @@ EXERCISE_API_MAX_RETRY_DELAY_SECONDS=30
 ```
 
 Never put the Supabase service-role key or ExerciseDB credentials in frontend code.
+
+For production deployment, see `DEPLOYMENT.md`.
 
 ## Setup
 
@@ -130,7 +134,7 @@ Check liveness:
 curl http://localhost:8000/health
 ```
 
-## Docker And Cloud Run
+## Docker And Render
 
 Build the backend image:
 
@@ -145,10 +149,10 @@ Run locally:
 docker run --env-file .env -p 8000:8000 strengthos-backend
 ```
 
-Deploy the image to Cloud Run with the backend environment variables configured as secrets or service environment variables. The container starts with:
+Deploy the backend to Render by importing this repo as a Blueprint. Render reads `render.yaml`, builds `backend/Dockerfile`, exposes `/health`, and serves `/mcp` from the same FastAPI process. The container starts with:
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 ```
 
-Cloud Run should expose `/health` and `/mcp` from the same backend process.
+Render should expose `/health` and `/mcp` from the same backend process.
