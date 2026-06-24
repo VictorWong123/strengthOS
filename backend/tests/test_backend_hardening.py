@@ -1,7 +1,9 @@
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from app import main as app_main
 from app.auth import dependencies as auth_dependencies
 from app.auth.dependencies import extract_bearer_token, verify_supabase_token
 from app.config import Settings
@@ -359,6 +361,74 @@ async def test_oauth_protected_resource_metadata_uses_public_backend_url(
         "scopes_supported": ["openid", "email", "profile"],
         "resource_documentation": "https://app.example.com",
     }
+
+
+def test_oauth_metadata_endpoint_is_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        app_main,
+        "get_settings",
+        lambda: make_settings(
+            backend_public_url="https://api.example.com",
+            frontend_url="https://app.example.com",
+        ),
+    )
+    monkeypatch.setattr(
+        oauth_metadata,
+        "get_settings",
+        lambda: make_settings(
+            backend_public_url="https://api.example.com",
+            frontend_url="https://app.example.com",
+        ),
+    )
+
+    client = TestClient(app_main.create_app())
+
+    response = client.get("/.well-known/oauth-protected-resource")
+
+    assert response.status_code == 200
+    assert response.json()["resource"] == "https://api.example.com/mcp"
+    assert response.json()["authorization_servers"] == ["https://example.supabase.co/auth/v1"]
+
+
+def test_unauthenticated_mcp_returns_bearer_resource_metadata_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        app_main,
+        "get_settings",
+        lambda: make_settings(backend_public_url="https://api.example.com"),
+    )
+
+    client = TestClient(app_main.create_app())
+
+    response = client.post("/mcp")
+
+    assert response.status_code == 401
+    assert (
+        response.headers["www-authenticate"]
+        == 'Bearer resource_metadata="https://api.example.com/.well-known/oauth-protected-resource"'
+    )
+
+
+def test_authenticated_mcp_request_checks_supabase_user_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    settings = make_settings(backend_public_url="https://api.example.com")
+    monkeypatch.setattr(app_main, "get_settings", lambda: settings)
+
+    async def fake_verify_supabase_token(token: str, resolved_settings: Settings):
+        calls.append(token)
+        assert resolved_settings is settings
+        return auth_dependencies.AuthenticatedUser(id="user-1")
+
+    monkeypatch.setattr(app_main, "verify_supabase_token", fake_verify_supabase_token)
+    with TestClient(app_main.create_app()) as client:
+        response = client.post("/mcp", headers={"Authorization": "Bearer access-token"})
+
+    assert calls
+    assert set(calls) == {"access-token"}
+    assert response.status_code != 401
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,12 @@ import { Dumbbell } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Button, Card, Input } from './ui'
 
-export function AuthView() {
+type AuthViewProps = {
+  returnTo?: string
+  onAuthenticated?: (path: string) => void
+}
+
+export function AuthView({ returnTo = '/', onAuthenticated }: AuthViewProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
@@ -11,7 +16,12 @@ export function AuthView() {
 
   async function signIn() {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    setMessage(error?.message ?? '')
+    if (error) {
+      setMessage(error.message)
+      return
+    }
+    setMessage('')
+    onAuthenticated?.(returnTo)
   }
 
   async function signUp() {

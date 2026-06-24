@@ -7,6 +7,7 @@ import { ExerciseDetails } from './components/ExerciseDetails'
 import { ExercisePicker } from './components/ExercisePicker'
 import { ExercisesPage } from './components/ExercisesPage'
 import { HomePage } from './components/HomePage'
+import { OAuthConsentPage } from './components/OAuthConsentPage'
 import { ProfilePage } from './components/ProfilePage'
 import { RoutineEditorPage } from './components/RoutineEditorPage'
 import { RoutineActionList } from './components/RoutineUI'
@@ -20,6 +21,7 @@ import {
   SecondaryButton,
 } from './components/ui'
 import { bestCompletedSet } from './lib/performance'
+import { getSafeReturnTo } from './lib/returnTo'
 import { supabase } from './lib/supabase'
 import { formatRoutineTarget, parseRoutineTarget } from './lib/training'
 import type { Exercise, Routine, RoutineExercise, Workout, WorkoutExercise, WorkoutSet } from './lib/types'
@@ -40,6 +42,8 @@ type Route =
   | { name: 'analytics'; pathname: '/analytics' }
   | { name: 'exercises'; pathname: '/exercises' }
   | { name: 'profile'; pathname: '/profile' }
+  | { name: 'login'; pathname: '/login' }
+  | { name: 'oauth-consent'; pathname: '/oauth/consent' }
   | { name: 'routine-new'; pathname: '/routines/new' }
   | { name: 'routine-edit'; pathname: string; routineId: string }
 
@@ -190,6 +194,12 @@ export function App() {
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
+
+  useEffect(() => {
+    if (session && route.name === 'login') {
+      navigate(getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo')))
+    }
+  }, [route.name, session])
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true)
@@ -896,7 +906,11 @@ export function App() {
 
   const routineActionTarget = selectedRoutineId ? orderedRoutines.find((routine) => routine.id === selectedRoutineId) ?? null : null
 
-  if (!session) return <AuthView />
+  if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} onNavigate={navigate} />
+  if (!session) {
+    const returnTo = route.name === 'login' ? getSafeReturnTo(new URLSearchParams(window.location.search).get('returnTo')) : '/'
+    return <AuthView returnTo={returnTo} onAuthenticated={navigate} />
+  }
 
   return (
     <AppShell currentPath={route.pathname} onNavigate={navigate}>
@@ -1135,6 +1149,8 @@ function parseRoute(pathname: string): Route {
   if (pathname === '/analytics') return { name: 'analytics', pathname }
   if (pathname === '/exercises') return { name: 'exercises', pathname }
   if (pathname === '/profile') return { name: 'profile', pathname }
+  if (pathname === '/login') return { name: 'login', pathname }
+  if (pathname === '/oauth/consent') return { name: 'oauth-consent', pathname }
   if (pathname === '/routines/new') return { name: 'routine-new', pathname }
 
   const routineMatch = pathname.match(/^\/routines\/([^/]+)\/edit$/)

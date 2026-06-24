@@ -1,8 +1,10 @@
 """FastAPI app for health, sync, analytics, and MCP operations."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from app.auth.dependencies import extract_bearer_token, verify_supabase_token
 from app.config import get_settings
 from app.mcp.server import create_mcp_app
 from app.routers import admin, exercise_images, health, oauth_metadata
@@ -30,6 +32,24 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(exercise_images.router)
     app.mount("/mcp", mcp_app)
+
+    @app.middleware("http")
+    async def require_mcp_bearer_token(request: Request, call_next):
+        """Challenge unauthenticated MCP clients without blocking public endpoints."""
+
+        if request.url.path.startswith("/mcp"):
+            try:
+                token = extract_bearer_token(request.headers.get("authorization"))
+                await verify_supabase_token(token, settings)
+            except HTTPException as exc:
+                if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+                    raise
+                return JSONResponse(
+                    {"detail": "Missing, invalid, or expired bearer token."},
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    headers={"WWW-Authenticate": oauth_metadata.bearer_challenge(settings, request)},
+                )
+        return await call_next(request)
     return app
 
 

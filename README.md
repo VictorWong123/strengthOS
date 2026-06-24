@@ -43,6 +43,7 @@ EXERCISE_API_MAX_RETRY_DELAY_SECONDS=30
 Never put the Supabase service-role key or ExerciseDB credentials in frontend code.
 
 For production deployment, see `DEPLOYMENT.md`.
+For the deployed ChatGPT MCP connector settings, see `CHATGPT_MCP.md`.
 
 ## Setup
 
@@ -104,6 +105,18 @@ Authorization: Bearer <supabase_access_token>
 ```
 
 The backend validates that token with Supabase Auth and never accepts a client-provided `user_id`. Tools are read-only and query Supabase through shared backend services.
+
+For ChatGPT, users should not paste bearer tokens. ChatGPT discovers the OAuth configuration from:
+
+```text
+https://strengthos.onrender.com/.well-known/oauth-protected-resource
+```
+
+Unauthenticated `/mcp` requests return a `401` bearer challenge that points to that metadata endpoint. Supabase OAuth then redirects users through the frontend consent page:
+
+```text
+https://strength-os-nu.vercel.app/oauth/consent
+```
 
 Example OpenAI Responses MCP configuration:
 
