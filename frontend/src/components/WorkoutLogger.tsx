@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Clock3, Dumbbell, Plus, Trash2, X } from 'lucide-react'
 import { mergeSetRpe, parseSetRpe } from '../lib/training'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
@@ -6,6 +6,7 @@ import { ExerciseSummary } from './ExerciseSummary'
 import { BottomSheet, ConfirmDialog, EmptyState, Field, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
 
 type Props = {
+  isLoading?: boolean
   workout: Workout | null
   workoutExercises: WorkoutExercise[]
   sets: WorkoutSet[]
@@ -46,6 +47,7 @@ type RestTimerTarget =
   | { kind: 'exercise'; workoutExerciseId: string; exerciseName: string | null }
 
 export function WorkoutLogger({
+  isLoading = false,
   workout,
   workoutExercises,
   sets,
@@ -114,6 +116,16 @@ export function WorkoutLogger({
 
   function startRestTimer(seconds: number) {
     setRestEndAt(Date.now() + seconds * 1000)
+  }
+
+  if (!workout && isLoading) {
+    return (
+      <SurfaceCard className="space-y-4">
+        <div className="h-5 w-40 animate-pulse rounded-full bg-white/10" />
+        <div className="h-24 animate-pulse rounded-2xl bg-white/10" />
+        <div className="h-24 animate-pulse rounded-2xl bg-white/10" />
+      </SurfaceCard>
+    )
   }
 
   if (!workout) {
@@ -667,22 +679,41 @@ function RestWheel({
   values: number[]
   onChange: (value: number) => void
 }) {
+  const selectedRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: 'center' })
+  }, [value])
+
   return (
-    <label className="block">
+    <div>
       <span className="mb-2 block text-center text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</span>
-      <select
-        className="scrollbar-hidden h-44 w-full rounded-2xl border border-white/10 bg-surface-input px-4 py-2 text-center text-2xl font-semibold text-text-primary focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
-        size={5}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+      <div
+        className="scrollable-touch scrollbar-hidden h-48 overflow-y-auto rounded-2xl border border-white/10 bg-surface-input p-2"
+        role="listbox"
+        aria-label={label}
+        aria-activedescendant={`${label}-${value}`}
+        tabIndex={0}
       >
         {values.map((item) => (
-          <option key={item} value={item}>
+          <button
+            key={item}
+            id={`${label}-${item}`}
+            ref={item === value ? selectedRef : undefined}
+            type="button"
+            className={cn(
+              'block min-h-11 w-full rounded-xl text-center text-2xl font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue',
+              item === value ? 'bg-accent-blue text-white' : 'text-text-secondary active:bg-surface-elevated',
+            )}
+            role="option"
+            aria-selected={item === value}
+            onClick={() => onChange(item)}
+          >
             {String(item).padStart(2, '0')}
-          </option>
+          </button>
         ))}
-      </select>
-    </label>
+      </div>
+    </div>
   )
 }
 

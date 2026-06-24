@@ -10,6 +10,7 @@ type ExerciseRecord = {
 
 type ActiveWorkoutPageProps = {
   banners: ReactNode
+  isLoading: boolean
   workout: Workout | null
   workoutExercises: WorkoutExercise[]
   sets: WorkoutSet[]
@@ -29,6 +30,7 @@ type ActiveWorkoutPageProps = {
 
 export function ActiveWorkoutPage({
   banners,
+  isLoading,
   workout,
   workoutExercises,
   sets,
@@ -53,6 +55,7 @@ export function ActiveWorkoutPage({
       />
       {banners}
       <WorkoutLogger
+        isLoading={isLoading}
         workout={workout}
         workoutExercises={workoutExercises}
         sets={sets}

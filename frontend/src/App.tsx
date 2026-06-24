@@ -420,6 +420,10 @@ export function App() {
     window.scrollTo({ top: 0, behavior: 'auto' })
   }, [pathname])
 
+  const navigateFromShell = useCallback((nextPath: string) => {
+    navigate(nextPath === '/workout' && activeWorkout ? '/workout/active' : nextPath)
+  }, [activeWorkout, navigate])
+
   async function createWorkout(name = 'Workout'): Promise<Workout | null> {
     if (!session) return null
 
@@ -734,8 +738,9 @@ export function App() {
       return
     }
 
+    setPickerMode(null)
     const added = await addExerciseToWorkout(exercise, true)
-    if (added) setPickerMode(null)
+    if (!added) setPickerMode('workout')
   }
 
   function addExerciseToRoutineDraft(exercise: Exercise) {
@@ -929,7 +934,7 @@ export function App() {
   if (!session) return null
 
   return (
-    <AppShell currentPath={route.pathname} onNavigate={navigate}>
+    <AppShell currentPath={route.pathname} onNavigate={navigateFromShell}>
       {renderPage()}
 
       <BottomSheet
@@ -1019,7 +1024,17 @@ export function App() {
       )
     }
 
-    return <PrimaryButton onClick={() => void addExerciseToWorkout(exercise, true)}>Add to Workout</PrimaryButton>
+    return (
+      <PrimaryButton
+        onClick={() => {
+          setSelectedExercise(null)
+          setPickerMode(null)
+          void addExerciseToWorkout(exercise, true)
+        }}
+      >
+        Add to Workout
+      </PrimaryButton>
+    )
   }
 
   function renderPage() {
@@ -1062,6 +1077,7 @@ export function App() {
         return (
           <ActiveWorkoutPage
             banners={renderBanners()}
+            isLoading={isInitialLoading}
             workout={activeWorkout}
             workoutExercises={activeWorkoutExercises}
             sets={activeWorkoutSets}

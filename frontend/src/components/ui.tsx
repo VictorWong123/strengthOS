@@ -416,7 +416,7 @@ export function BottomSheet({ open, onClose, title, description, children, foote
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 overflow-hidden bg-black/70" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="absolute inset-x-0 bottom-0 mx-auto max-w-[760px] px-3 pb-[max(18px,env(safe-area-inset-bottom))]">
         <div
           ref={containerRef}
@@ -425,10 +425,10 @@ export function BottomSheet({ open, onClose, title, description, children, foote
           aria-labelledby={titleId}
           aria-describedby={description ? descriptionId : undefined}
           tabIndex={-1}
-          className="max-h-[92vh] overflow-hidden rounded-modal border border-white/10 bg-surface-card shadow-panel outline-none"
+          className="flex max-h-[92dvh] flex-col overflow-hidden rounded-modal border border-white/10 bg-surface-card shadow-panel outline-none"
         >
           <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-white/15" aria-hidden="true" />
-          <div className="flex items-start justify-between gap-4 px-4 pb-4 pt-3">
+          <div className="shrink-0 flex items-start justify-between gap-4 px-4 pb-4 pt-3">
             <div className="min-w-0">
               <h3 id={titleId} className="text-lg font-semibold">
                 {title}
@@ -443,8 +443,8 @@ export function BottomSheet({ open, onClose, title, description, children, foote
               <X className="h-4 w-4" aria-hidden="true" />
             </IconButton>
           </div>
-          <div className="max-h-[calc(92vh-132px)] overflow-y-auto px-4 pb-4">{children}</div>
-          {footer ? <div className="border-t border-white/10 px-4 py-4">{footer}</div> : null}
+          <div className="scrollable-touch min-h-0 flex-1 overflow-y-auto px-4 pb-4">{children}</div>
+          {footer ? <div className="shrink-0 border-t border-white/10 px-4 py-4">{footer}</div> : null}
         </div>
       </div>
     </div>
