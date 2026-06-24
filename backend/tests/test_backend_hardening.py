@@ -1,3 +1,6 @@
+import shutil
+from pathlib import Path
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -155,7 +158,9 @@ async def test_exercisedb_provider_falls_back_to_body_part_endpoints(
 
 
 @pytest.mark.asyncio
-async def test_exercise_image_proxy_streams_provider_gif(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_exercise_image_proxy_streams_provider_gif(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = make_settings(
         exercise_api_key=SecretStr("rapidapi-key"),
         exercise_api_host="exercisedb.p.rapidapi.com",
@@ -163,14 +168,66 @@ async def test_exercise_image_proxy_streams_provider_gif(monkeypatch: pytest.Mon
     FakeAsyncClient.requests = []
     FakeAsyncClient.statuses = [200]
     FakeAsyncClient.pages = [b"GIF89a"]
+    cache_dir = Path("pytest-cache-files-exercise-images-stream")
+    shutil.rmtree(cache_dir, ignore_errors=True)
     monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
+    monkeypatch.setattr(exercise_images, "IMAGE_CACHE_DIR", cache_dir)
     monkeypatch.setattr("app.routers.exercise_images.httpx.AsyncClient", FakeAsyncClient)
 
-    response = await exercise_images.get_exercise_image("0001", "180")
+    try:
+        response = await exercise_images.get_exercise_image("0001", "180")
+    finally:
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
     assert response.media_type == "image/gif"
     assert FakeAsyncClient.requests[0]["url"] == "https://exercisedb.p.rapidapi.com/image"
     assert FakeAsyncClient.requests[0]["params"] == {"exerciseId": "0001", "resolution": "180"}
+
+
+@pytest.mark.asyncio
+async def test_exercise_image_proxy_serves_cached_image_without_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+    )
+    cache_dir = Path("pytest-cache-files-exercise-images-cached")
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
+    monkeypatch.setattr(exercise_images, "IMAGE_CACHE_DIR", cache_dir)
+    exercise_images.write_cached_image("0001", "180", b"GIF89a", "image/gif")
+
+    try:
+        response = await exercise_images.get_exercise_image("0001", "180")
+    finally:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    assert response.media_type == "image/gif"
+    assert response.body == b"GIF89a"
+
+
+@pytest.mark.asyncio
+async def test_exercise_image_proxy_surfaces_provider_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+    )
+
+    class RateLimitedExerciseDBClient:
+        def __init__(self, _settings: Settings) -> None:
+            return None
+
+        async def get(self, *_args: object, **_kwargs: object) -> FakeResponse:
+            return FakeResponse(b"rate limited", 429)
+
+    monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
+    monkeypatch.setattr(exercise_images, "ExerciseDBClient", RateLimitedExerciseDBClient)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exercise_images.get_exercise_image("0001", "180")
+
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
