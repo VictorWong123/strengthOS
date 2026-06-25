@@ -20,50 +20,13 @@ Do not introduce a second application database, local persistence layer, or back
 
 MCP and backend user-scoped operations must derive the user from a validated Supabase bearer token. Never trust a client-provided `user_id` for user-scoped data access.
 
-## Development Commands
-
-Frontend:
-
-```bash
-cd frontend
-npm install
-npm run dev
-npm run build
-npm run test:return-to
-```
-
-Backend:
-
-```bash
-cd backend
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
-python -m app.scripts.sync_exercises
-pytest
-```
-
-On Windows, backend dev server can also be started with:
-
-```bash
-cd backend
-py -m uvicorn app.main:app --reload
-```
-
-Docker:
-
-```bash
-docker build -t strengthos-backend .
-cd backend
-docker build -t strengthos-backend .
-```
-
 ## Frontend Style
 
 Use TypeScript, React function components, and hooks. Components use `PascalCase`; hooks and helpers use `camelCase`.
 
 Keep feature UI in focused components under `frontend/src/components/`. Put reusable logic in `frontend/src/lib/` when it is shared by multiple components or tests. Prefer existing primitives from `frontend/src/components/ui.tsx` before adding new ad hoc button, card, sheet, header, or banner markup.
+
+Keep UI components small and single-purpose. If a component file renders multiple unrelated controls, surfaces, layouts, or behaviors, split it into focused components named after the thing they own. For example, shared primitives should live under `frontend/src/components/ui/`, with one component per file and a short top comment explaining what that component is for. Use the `frontend/src/components/ui/index.ts` barrel for exports, but do not recreate a large catch-all `ui.tsx` file.
 
 This app is mobile-first and app-like, not a marketing site. Keep screens dense, direct, and touch-friendly. Follow the existing dark theme, Tailwind tokens, bottom navigation, mobile headers, bottom sheets, dialogs, and banner patterns.
 
