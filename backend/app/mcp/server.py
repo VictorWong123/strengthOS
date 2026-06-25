@@ -143,6 +143,14 @@ def create_mcp_app(settings: Settings):
         return await authenticated_call(headers, analytics.get_current_routines)
 
     @mcp.tool
+    async def get_user_profile(
+        headers: dict[str, str] = CurrentHeaders(),
+    ) -> dict[str, Any]:
+        """Return optional profile data for personalized recommendations."""
+
+        return await authenticated_call(headers, analytics.get_user_profile)
+
+    @mcp.tool
     async def get_user_training_context(
         headers: dict[str, str] = CurrentHeaders(),
     ) -> dict[str, Any]:

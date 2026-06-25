@@ -6,7 +6,6 @@ import {
   GripVertical,
   Pencil,
   Copy,
-  Trash2,
   ArrowUp,
   ArrowDown,
   Play,
@@ -17,6 +16,7 @@ import {
   EmptyState,
   Field,
   FixedBottomActions,
+  DeleteTextButton,
   IconButton,
   Input,
   LoadingSkeleton,
@@ -192,7 +192,11 @@ export function RoutineActionList({
       <ActionButton icon={Copy} label="Duplicate" onClick={onDuplicate} />
       <ActionButton icon={ArrowUp} label="Move Up" onClick={onMoveUp} disabled={!canMoveUp} />
       <ActionButton icon={ArrowDown} label="Move Down" onClick={onMoveDown} disabled={!canMoveDown} />
-      <ActionButton icon={Trash2} label="Delete" onClick={onDelete} tone="danger" />
+      <DeleteTextButton
+        label="Delete"
+        onClick={onDelete}
+        className="touch-target flex w-full items-center gap-3 rounded-2xl border border-white/10 bg-surface-input px-4 py-3 text-left text-base font-medium active:bg-surface-elevated"
+      />
     </div>
   )
 }
@@ -290,14 +294,7 @@ export function RoutineEditor({
                   onChange={(value) => onExerciseFieldChange(item.id, { targetRpe: value })}
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => onRemoveExercise(item.id)}
-                className="inline-flex items-center gap-2 text-sm font-medium text-accent-danger"
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                Remove exercise
-              </button>
+              <DeleteTextButton label="Remove exercise" onClick={() => onRemoveExercise(item.id)} />
             </SurfaceCard>
           ))
         ) : (

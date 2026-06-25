@@ -4,7 +4,7 @@ import { MaxWeightProgressChart } from './charts/MaxWeightProgressChart'
 import { VolumeProgressChart } from './charts/VolumeProgressChart'
 import { WorkoutHeatmap } from './charts/WorkoutHeatmap'
 import type { ExerciseSession } from './charts/types'
-import { Select, SurfaceCard } from './ui'
+import { MetricCard, Select, SurfaceCard } from './ui'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 
 type AnalyticsPageProps = {
@@ -100,8 +100,20 @@ export function AnalyticsPage({ exercises, workouts, workoutExercises, sets }: A
             </Select>
 
             <div className="grid grid-cols-2 gap-3">
-              <MetricCard label="Best Volume" value={bestVolume ? formatNumber(bestVolume.volume) : '0'} detail={bestVolume?.label ?? 'No data'} />
-              <MetricCard label="Max Weight" value={bestMaxWeight ? formatWeight(bestMaxWeight.maxWeight) : '0 lb'} detail={bestMaxWeight?.label ?? 'No data'} />
+              <MetricCard
+                label="Best Volume"
+                value={bestVolume ? formatNumber(bestVolume.volume) : '0'}
+                detail={bestVolume?.label ?? 'No data'}
+                className="border border-white/10"
+                valueClassName="text-2xl"
+              />
+              <MetricCard
+                label="Max Weight"
+                value={bestMaxWeight ? formatWeight(bestMaxWeight.maxWeight) : '0 lb'}
+                detail={bestMaxWeight?.label ?? 'No data'}
+                className="border border-white/10"
+                valueClassName="text-2xl"
+              />
             </div>
 
             <VolumeProgressChart sessions={sessions} />
@@ -117,16 +129,6 @@ export function AnalyticsPage({ exercises, workouts, workoutExercises, sets }: A
           </div>
         )}
       </SurfaceCard>
-    </div>
-  )
-}
-
-function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="rounded-card border border-white/10 bg-surface-input p-3">
-      <div className="text-xs font-medium uppercase text-text-muted">{label}</div>
-      <div className="mt-1 truncate text-2xl font-semibold">{value}</div>
-      <div className="mt-1 text-sm text-text-secondary">{detail}</div>
     </div>
   )
 }

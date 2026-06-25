@@ -8,6 +8,13 @@ MIGRATION_SQL = (
     / "202606180002_harden_workout_rls_constraints.sql"
 ).read_text(encoding="utf-8")
 
+PROFILE_NAMES_MIGRATION_SQL = (
+    Path(__file__).resolve().parents[2]
+    / "supabase"
+    / "migrations"
+    / "202606250001_add_profile_names.sql"
+).read_text(encoding="utf-8")
+
 
 def test_workout_sets_update_policy_checks_new_owner() -> None:
     policy_start = MIGRATION_SQL.index(
@@ -33,3 +40,9 @@ def test_user_entered_workout_numbers_are_nonnegative() -> None:
 
     for constraint in expected_constraints:
         assert constraint in MIGRATION_SQL
+
+
+def test_profile_names_are_added_without_breaking_existing_display_names() -> None:
+    assert "add column if not exists first_name text" in PROFILE_NAMES_MIGRATION_SQL
+    assert "add column if not exists last_name text" in PROFILE_NAMES_MIGRATION_SQL
+    assert "split_part(display_name, ' ', 1)" in PROFILE_NAMES_MIGRATION_SQL
