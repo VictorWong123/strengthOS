@@ -106,7 +106,7 @@ Clients must send:
 Authorization: Bearer <supabase_access_token>
 ```
 
-The backend validates that token with Supabase Auth and never accepts a client-provided `user_id`. Tools are read-only and query Supabase through shared backend services.
+The backend validates that token with Supabase Auth and never accepts a client-provided `user_id`. Tools are read-only and query Supabase through shared backend services. Profile-aware recommendation tools can call `get_user_profile` or the broader `get_user_training_context`.
 
 For ChatGPT, users should not paste bearer tokens. ChatGPT discovers the OAuth configuration from:
 
@@ -142,9 +142,6 @@ npm run build
 cd backend
 pytest
 ```
-
-https://strength-os-nu.vercel.app/oauth/consent?authorization_id=shhdcxwkjr4pzxr3s4jxfvzffixvhge6
-
 
 Check liveness:
 

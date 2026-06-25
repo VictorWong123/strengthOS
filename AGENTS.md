@@ -68,6 +68,7 @@ Current MCP tools:
 - `find_stagnating_exercises`
 - `find_undertrained_muscle_groups`
 - `get_current_routines`
+- `get_user_profile`
 - `get_user_training_context`
 
 ## Environment And Secrets

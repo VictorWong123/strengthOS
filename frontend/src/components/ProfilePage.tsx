@@ -4,7 +4,7 @@ import { House, LogOut } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Field, IconButton, Input, MobileHeader, Pill, PrimaryButton, SecondaryButton, Select, SurfaceCard, Textarea } from './ui'
 
-const PROFILE_COLUMNS = 'id, display_name, age, body_weight_lbs, height_inches, training_goal, training_experience, limitations'
+const PROFILE_COLUMNS = 'id, display_name, first_name, last_name, age, body_weight_lbs, height_inches, training_goal, training_experience, limitations'
 
 type StatusMessage = {
   tone: 'warning' | 'danger' | 'success'
@@ -21,6 +21,8 @@ type ProfilePageProps = {
 type ProfileRow = {
   id: string
   display_name: string | null
+  first_name: string | null
+  last_name: string | null
   age: number | null
   body_weight_lbs: number | null
   height_inches: number | null
@@ -31,6 +33,8 @@ type ProfileRow = {
 
 type ProfileDraft = {
   displayName: string
+  firstName: string
+  lastName: string
   age: string
   bodyWeight: string
   heightFeet: string
@@ -42,6 +46,8 @@ type ProfileDraft = {
 
 const EMPTY_PROFILE_DRAFT: ProfileDraft = {
   displayName: '',
+  firstName: '',
+  lastName: '',
   age: '',
   bodyWeight: '',
   heightFeet: '',
@@ -130,10 +136,24 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
           <h2 className="text-xl font-semibold">Account</h2>
           <p className="mt-2 text-sm text-text-secondary">{session?.user.email ?? ''}</p>
         </div>
-        <SecondaryButton onClick={() => supabase.auth.signOut()}>
-          <LogOut className="h-4 w-4" aria-hidden="true" />
-          Logout
-        </SecondaryButton>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="First name">
+            <Input
+              placeholder="Optional"
+              value={draft.firstName}
+              disabled={isLoading}
+              onChange={(event) => setDraft((current) => ({ ...current, firstName: event.target.value }))}
+            />
+          </Field>
+          <Field label="Last name">
+            <Input
+              placeholder="Optional"
+              value={draft.lastName}
+              disabled={isLoading}
+              onChange={(event) => setDraft((current) => ({ ...current, lastName: event.target.value }))}
+            />
+          </Field>
+        </div>
       </SurfaceCard>
       <SurfaceCard className="space-y-4">
         <div>
@@ -225,6 +245,12 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
           </PrimaryButton>
         </div>
       </SurfaceCard>
+      <SurfaceCard>
+        <SecondaryButton className="w-full" onClick={() => supabase.auth.signOut()}>
+          <LogOut className="h-4 w-4" aria-hidden="true" />
+          Logout
+        </SecondaryButton>
+      </SurfaceCard>
     </div>
   )
 }
@@ -235,6 +261,8 @@ function profileToDraft(profile: ProfileRow): ProfileDraft {
 
   return {
     displayName: profile.display_name ?? '',
+    firstName: profile.first_name ?? '',
+    lastName: profile.last_name ?? '',
     age: profile.age === null ? '' : String(profile.age),
     bodyWeight: profile.body_weight_lbs === null ? '' : formatNumber(profile.body_weight_lbs),
     heightFeet,
@@ -278,7 +306,9 @@ function draftToProfilePayload(draft: ProfileDraft):
   return {
     ok: true,
     value: {
-      display_name: nullIfBlank(draft.displayName),
+      display_name: displayNameFromDraft(draft),
+      first_name: nullIfBlank(draft.firstName),
+      last_name: nullIfBlank(draft.lastName),
       age,
       body_weight_lbs: bodyWeight,
       height_inches: totalHeight,
@@ -287,6 +317,11 @@ function draftToProfilePayload(draft: ProfileDraft):
       limitations: nullIfBlank(draft.limitations),
     },
   }
+}
+
+function displayNameFromDraft(draft: ProfileDraft): string | null {
+  const joined = [draft.firstName.trim(), draft.lastName.trim()].filter(Boolean).join(' ')
+  return joined || nullIfBlank(draft.displayName)
 }
 
 function parseOptionalNumber(value: string): number | null | 'invalid' {

@@ -577,6 +577,19 @@ async def test_training_repository_scopes_workout_reads_to_user(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
+async def test_training_repository_scopes_profile_reads_to_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeSupabaseService.instances = []
+    monkeypatch.setattr(training_repository_module, "SupabaseService", FakeSupabaseService)
+
+    async with TrainingRepository(make_settings()) as repository:
+        await repository.get_profile("user-1")
+
+    call = FakeSupabaseService.instances[0].calls[0]
+    assert call["table"] == "profiles"
+    assert call["kwargs"]["id"] == "eq.user-1"
+
+
+@pytest.mark.asyncio
 async def test_training_repository_scopes_visible_exercises_to_global_or_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -619,6 +632,22 @@ class FakeTrainingRepository:
 
     async def __aexit__(self, *_exc_info: object) -> None:
         return None
+
+    async def get_profile(self, user_id: str) -> dict[str, object]:
+        assert user_id == "user-1"
+        return {
+            "id": "user-1",
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "display_name": "Ada Lovelace",
+            "age": 32,
+            "body_weight_lbs": 140,
+            "height_inches": 66,
+            "training_goal": "strength",
+            "training_experience": "intermediate",
+            "limitations": "knee sensitivity",
+            "private_internal_field": "not returned",
+        }
 
     async def find_exercise_by_name(self, user_id: str, exercise_name: str) -> dict[str, object]:
         assert user_id == "user-1"
@@ -665,3 +694,24 @@ async def test_strength_progress_returns_structured_summary(monkeypatch: pytest.
     assert result["exercise"]["name"] == "Bench Press"
     assert result["performances"][0]["best_set"]["estimated_1rm"] == 116.67
     assert result["summary"]["classification"] == "progressing"
+
+
+@pytest.mark.asyncio
+async def test_user_profile_returns_recommendation_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.training_analytics.TrainingRepository", FakeTrainingRepository)
+
+    result = await TrainingAnalyticsService(make_settings()).get_user_profile("user-1")
+
+    assert result == {
+        "profile": {
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "display_name": "Ada Lovelace",
+            "age": 32,
+            "body_weight_lbs": 140,
+            "height_inches": 66,
+            "training_goal": "strength",
+            "training_experience": "intermediate",
+            "limitations": "knee sensitivity",
+        }
+    }

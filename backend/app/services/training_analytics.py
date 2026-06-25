@@ -289,15 +289,26 @@ class TrainingAnalyticsService:
             routine["exercises"] = by_routine.get(routine["id"], [])
         return {"routines": routines}
 
-    async def get_user_training_context(self, user_id: str) -> dict[str, Any]:
-        """Return a compact profile, recent summary, records, and routine context."""
+    async def get_user_profile(self, user_id: str) -> dict[str, Any]:
+        """Return optional profile details for personalized training recommendations."""
 
         async with TrainingRepository(self._settings) as repository:
             profile = await repository.get_profile(user_id)
+        return {"profile": _profile_summary(profile)}
+
+    async def get_user_training_context(self, user_id: str) -> dict[str, Any]:
+        """Return a compact profile, recent summary, records, and routine context."""
+
+        profile = await self.get_user_profile(user_id)
         recent = await self.get_weekly_training_summary(user_id, weeks=4)
         records = await self.get_personal_records(user_id, days=365)
         routines = await self.get_current_routines(user_id)
-        return {"profile": profile, "weekly_summary": recent, "personal_records": records, "routines": routines}
+        return {
+            "profile": profile["profile"],
+            "weekly_summary": recent,
+            "personal_records": records,
+            "routines": routines,
+        }
 
     async def _exercise_performances(
         self,
@@ -414,6 +425,22 @@ def _exercise_summary(exercise: dict[str, Any]) -> dict[str, Any]:
         "name": exercise.get("name"),
         "equipment": exercise.get("equipment"),
         "primary_muscle": exercise.get("primary_muscle"),
+    }
+
+
+def _profile_summary(profile: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not profile:
+        return None
+    return {
+        "first_name": profile.get("first_name"),
+        "last_name": profile.get("last_name"),
+        "display_name": profile.get("display_name"),
+        "age": profile.get("age"),
+        "body_weight_lbs": profile.get("body_weight_lbs"),
+        "height_inches": profile.get("height_inches"),
+        "training_goal": profile.get("training_goal"),
+        "training_experience": profile.get("training_experience"),
+        "limitations": profile.get("limitations"),
     }
 
 
