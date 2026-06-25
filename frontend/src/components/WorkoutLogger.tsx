@@ -1,9 +1,27 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Clock3, Dumbbell, Plus, Trash2, X } from 'lucide-react'
-import { mergeSetRpe, parseSetRpe } from '../lib/training'
+import { CheckCircle2, Dumbbell, Plus, X } from 'lucide-react'
 import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 import { ExerciseSummary } from './ExerciseSummary'
-import { BottomSheet, ConfirmDialog, EmptyState, Field, FixedBottomActions, IconButton, Input, PrimaryButton, SecondaryButton, SurfaceCard, Textarea, cn } from './ui'
+import {
+  BottomSheet,
+  ConfirmDialog,
+  DeleteIconButton,
+  DeleteTextButton,
+  EmptyState,
+  Field,
+  FixedBottomActions,
+  IconButton,
+  Input,
+  MetricCard,
+  PrimaryButton,
+  SecondaryButton,
+  SurfaceCard,
+  Textarea,
+  TimerIconButton,
+  TimerPill,
+  TimerSettingButton,
+  cn,
+} from './ui'
 
 type Props = {
   isLoading?: boolean
@@ -170,17 +188,11 @@ export function WorkoutLogger({
               }}
             />
           </Field>
-          <button
-            type="button"
-            className="flex min-h-[52px] w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-surface-input px-3 py-3 text-left transition active:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card"
+          <TimerSettingButton
+            label="Default rest"
+            value={formatRestDuration(workoutRestSeconds)}
             onClick={() => setRestTimerTarget({ kind: 'workout' })}
-          >
-            <span className="flex items-center gap-2 text-sm font-medium text-text-secondary">
-              <Clock3 className="h-4 w-4 text-accent-blue" aria-hidden="true" />
-              Default rest
-            </span>
-            <span className="font-semibold">{formatRestDuration(workoutRestSeconds)}</span>
-          </button>
+          />
         </SurfaceCard>
       </header>
 
@@ -243,7 +255,7 @@ export function WorkoutLogger({
         open={isDiscardConfirmOpen}
         onClose={() => setIsDiscardConfirmOpen(false)}
         title="Discard workout?"
-        description="This permanently deletes this workout, its exercises, and its sets."
+        description="This permanently deletes this workout, its exercises, and all logged sets."
         footer={
           <div className="flex gap-3">
             <SecondaryButton className="flex-1" onClick={() => setIsDiscardConfirmOpen(false)}>
@@ -255,7 +267,9 @@ export function WorkoutLogger({
           </div>
         }
       >
-        <p className="text-sm text-text-secondary">Saving keeps the workout in your history. Discarding cannot be undone.</p>
+        <div className="rounded-card border border-accent-danger/20 bg-surface-danger p-3 text-sm text-text-secondary">
+          This action cannot be undone. Finish the workout instead if you want it saved in your history.
+        </div>
       </ConfirmDialog>
 
       <RestDurationSheet
@@ -283,12 +297,9 @@ export function WorkoutTimer({ startedAt }: { startedAt: string }) {
   const seconds = Math.floor((elapsedMs % 60_000) / 1000)
 
   return (
-    <div className="flex items-center gap-2 rounded-full bg-surface-card px-4 py-2 text-sm font-semibold">
-      <Clock3 className="h-4 w-4 text-accent-blue" aria-hidden="true" />
-      <span>
-        {hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}` : `${minutes}:${String(seconds).padStart(2, '0')}`}
-      </span>
-    </div>
+    <TimerPill>
+      {hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}` : `${minutes}:${String(seconds).padStart(2, '0')}`}
+    </TimerPill>
   )
 }
 
@@ -336,27 +347,21 @@ export function ActiveWorkoutExerciseCard({
           </div>
         )}
         <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-surface-input text-text-secondary transition active:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue"
-            aria-label={`Set rest for ${exercise?.name ?? 'exercise'} (${formatRestDuration(effectiveRestSeconds)})`}
-            title={`Rest ${formatRestDuration(effectiveRestSeconds)}`}
+          <TimerIconButton
+            label={`Set rest for ${exercise?.name ?? 'exercise'} (${formatRestDuration(effectiveRestSeconds)})`}
             onClick={onChangeRestSeconds}
-          >
-            <Clock3 className="h-4 w-4" aria-hidden="true" />
-          </button>
+          />
           <IconButton aria-label={`Add set to ${exercise?.name ?? 'exercise'}`} onClick={onAddSet}>
             <Plus className="h-4 w-4" aria-hidden="true" />
           </IconButton>
         </div>
       </div>
 
-      <div className="grid grid-cols-[2rem_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">
+      <div className="grid grid-cols-[2rem_minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">
         <span>Set</span>
         <span>Previous</span>
         <span>Weight</span>
         <span>Reps</span>
-        <span>RPE</span>
         <span>Done</span>
       </div>
 
@@ -420,17 +425,21 @@ function FinishWorkoutSheet({
       footer={
         <div className="grid gap-3">
           <PrimaryButton onClick={onSave}>Save Workout</PrimaryButton>
-          <button type="button" className="min-h-11 text-sm font-semibold text-accent-danger" onClick={onDiscard}>
-            Discard Workout
-          </button>
         </div>
+      }
+      headerAction={
+        <DeleteIconButton
+          label="Discard workout"
+          className="mr-2 h-10 w-10"
+          onClick={onDiscard}
+        />
       }
     >
       <div className="space-y-4">
         <div className="grid grid-cols-3 gap-3">
-          <SummaryMetric label="Lifted" value={`${formatNumber(summary.totalVolume)} lb`} />
-          <SummaryMetric label="Sets" value={String(summary.completedSets)} />
-          <SummaryMetric label="Time" value={formatDuration(summary.durationSeconds)} />
+          <MetricCard label="Lifted" value={`${formatNumber(summary.totalVolume)} lb`} valueClassName="text-lg" />
+          <MetricCard label="Sets" value={String(summary.completedSets)} valueClassName="text-lg" />
+          <MetricCard label="Time" value={formatDuration(summary.durationSeconds)} valueClassName="text-lg" />
         </div>
 
         <div>
@@ -454,15 +463,6 @@ function FinishWorkoutSheet({
         </div>
       </div>
     </BottomSheet>
-  )
-}
-
-function SummaryMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-surface-input p-3">
-      <div className="text-xs font-medium uppercase text-text-muted">{label}</div>
-      <div className="mt-1 truncate text-lg font-semibold">{value}</div>
-    </div>
   )
 }
 
@@ -510,11 +510,9 @@ export const SetRow = memo(function SetRow({
 }) {
   const [weightDraft, setWeightDraft] = useState(formatValue(set.weight))
   const [repsDraft, setRepsDraft] = useState(formatValue(set.reps))
-  const [rpeDraft, setRpeDraft] = useState(parseSetRpe(set.notes))
 
   useEffect(() => setWeightDraft(formatValue(set.weight)), [set.weight])
   useEffect(() => setRepsDraft(formatValue(set.reps)), [set.reps])
-  useEffect(() => setRpeDraft(parseSetRpe(set.notes)), [set.notes])
 
   function commitNumber(field: 'weight' | 'reps', draft: string) {
     const currentValue = field === 'weight' ? set.weight : set.reps
@@ -537,12 +535,6 @@ export const SetRow = memo(function SetRow({
     onUpdateSet(set, { [field]: nextValue })
   }
 
-  function commitRpe() {
-    const nextNotes = mergeSetRpe(set.notes, rpeDraft)
-    if (nextNotes === set.notes) return
-    onUpdateSet(set, { notes: nextNotes })
-  }
-
   function toggleCompleted() {
     const isCompleting = !set.is_completed
     onUpdateSet(set, {
@@ -553,7 +545,7 @@ export const SetRow = memo(function SetRow({
   }
 
   return (
-    <div className={cn('grid grid-cols-[2rem_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 rounded-2xl p-2', set.is_completed ? 'bg-surface-success ring-1 ring-accent-done/25' : 'bg-surface-input')}>
+    <div className={cn('grid grid-cols-[2rem_minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 rounded-2xl p-2', set.is_completed ? 'bg-surface-success ring-1 ring-accent-done/25' : 'bg-surface-input')}>
       <div className="flex items-center justify-center text-sm text-text-secondary">{set.set_order + 1}</div>
       <button
         type="button"
@@ -588,14 +580,6 @@ export const SetRow = memo(function SetRow({
         onChange={(event) => setRepsDraft(event.target.value)}
         onBlur={() => commitNumber('reps', repsDraft)}
       />
-      <input
-        inputMode="decimal"
-        className="w-full rounded-xl border border-white/10 bg-surface-card px-2 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
-        value={rpeDraft}
-        placeholder="8"
-        onChange={(event) => setRpeDraft(event.target.value)}
-        onBlur={commitRpe}
-      />
       <button
         type="button"
         className={cn(
@@ -608,14 +592,7 @@ export const SetRow = memo(function SetRow({
       >
         <CheckCircle2 className={cn('mx-auto h-5 w-5', !set.is_completed && 'opacity-45')} aria-hidden="true" />
       </button>
-      <button
-        type="button"
-        className="touch-target col-span-full inline-flex items-center justify-end gap-2 text-sm text-text-secondary"
-        onClick={() => onDeleteSet(set)}
-      >
-        <Trash2 className="h-4 w-4" aria-hidden="true" />
-        Delete set
-      </button>
+      <DeleteTextButton className="touch-target col-span-full justify-end text-text-secondary" label="Delete set" onClick={() => onDeleteSet(set)} />
     </div>
   )
 })

@@ -21,7 +21,7 @@ import {
   SecondaryButton,
 } from './components/ui'
 import { assignReturnToAfterAuth, logAuthEvent } from './lib/authRedirect'
-import { bestCompletedSet } from './lib/performance'
+import { estimatedOneRepMax } from './lib/performance'
 import { supabase } from './lib/supabase'
 import { formatRoutineTarget, parseRoutineTarget } from './lib/training'
 import type { Exercise, Routine, RoutineExercise, Workout, WorkoutExercise, WorkoutSet } from './lib/types'
@@ -177,7 +177,37 @@ export function App() {
     () => completedWorkouts.filter((workout) => Date.now() - new Date(workout.completed_at ?? workout.started_at).getTime() <= 7 * 24 * 60 * 60 * 1000),
     [completedWorkouts],
   )
-  const personalRecord = useMemo(() => bestCompletedSet(sets) ?? null, [sets])
+  const weeklySummary = useMemo(() => {
+    const weeklyWorkoutIds = new Set(weeklyCompletedWorkouts.map((workout) => workout.id))
+    const weeklyWorkoutExerciseById = new Map<string, WorkoutExercise>()
+    const completedWorkoutExerciseIds = new Set<string>()
+    let poundsLifted = 0
+    let bestSet: WorkoutSet | null = null
+    let bestExerciseName = ''
+
+    for (const item of workoutExercises) {
+      if (weeklyWorkoutIds.has(item.workout_id)) weeklyWorkoutExerciseById.set(item.id, item)
+    }
+
+    for (const set of sets) {
+      const workoutExercise = weeklyWorkoutExerciseById.get(set.workout_exercise_id)
+      if (!workoutExercise || !set.is_completed || !set.weight || !set.reps) continue
+      completedWorkoutExerciseIds.add(workoutExercise.id)
+      poundsLifted += set.weight * set.reps
+
+      if (!bestSet || (estimatedOneRepMax(set) ?? 0) > (estimatedOneRepMax(bestSet) ?? 0)) {
+        bestSet = set
+        bestExerciseName = workoutExercise ? exerciseById.get(workoutExercise.exercise_id)?.name ?? '' : ''
+      }
+    }
+
+    return {
+      workoutCount: weeklyCompletedWorkouts.length,
+      poundsLifted,
+      exercisesCompleted: completedWorkoutExerciseIds.size,
+      biggestPrExercise: bestExerciseName || (bestSet ? 'Unknown exercise' : 'None'),
+    }
+  }, [exerciseById, sets, weeklyCompletedWorkouts, workoutExercises])
 
   useEffect(() => {
     document.documentElement.classList.add('dark')
@@ -512,10 +542,10 @@ export function App() {
     const setPayload = insertedWorkoutExercises.flatMap((item, index) => {
       const template = templateExercises[index]
       const targetSets = Math.max(template?.target_sets ?? 1, 1)
-      return Array.from({ length: targetSets }, (_, setIndex) => ({
-        workout_exercise_id: item.id,
-        set_order: setIndex,
-      }))
+      return Array.from({ length: targetSets }, (_, setIndex) => {
+        const previousSet = template ? previousSetsByExerciseId.get(template.exercise_id)?.[setIndex] ?? null : null
+        return buildSetInsertPayload(item.id, setIndex, previousSet)
+      })
     })
 
     if (setPayload.length) {
@@ -532,10 +562,16 @@ export function App() {
   }
 
   async function addSet(workoutExerciseId: string, exerciseId?: string) {
-    const setOrder = setsByWorkoutExerciseId.get(workoutExerciseId)?.length ?? 0
+    const currentSets = setsByWorkoutExerciseId.get(workoutExerciseId) ?? []
+    const setOrder = currentSets.length
+    const workoutExercise = workoutExercises.find((item) => item.id === workoutExerciseId)
+    const resolvedExerciseId = exerciseId ?? workoutExercise?.exercise_id
+    const historicalDefault = resolvedExerciseId ? previousSetsByExerciseId.get(resolvedExerciseId)?.[setOrder] ?? null : null
+    const currentWorkoutDefault = currentSets[setOrder - 1] ?? null
+    const defaultSet = historicalDefault ?? currentWorkoutDefault
     const { data, error } = await supabase
       .from('workout_sets')
-      .insert({ workout_exercise_id: workoutExerciseId, set_order: setOrder })
+      .insert(buildSetInsertPayload(workoutExerciseId, setOrder, defaultSet))
       .select(WORKOUT_SET_COLUMNS)
       .single()
 
@@ -1043,11 +1079,11 @@ export function App() {
         return (
           <HomePage
             banners={renderBanners()}
-            weeklyCompletedWorkouts={weeklyCompletedWorkouts}
             completedWorkouts={completedWorkouts}
-            routines={routines}
-            exerciseCount={exercises.length}
-            personalRecord={personalRecord}
+            workoutExercises={workoutExercises}
+            sets={sets}
+            exerciseById={exerciseById}
+            weeklySummary={weeklySummary}
             onOpenProfile={() => navigate('/profile')}
           />
         )
@@ -1213,6 +1249,15 @@ function groupBy<T>(items: T[], getKey: (item: T) => string, sort?: (left: T, ri
     map.set(key, sort ? group.sort(sort) : group)
   }
   return map
+}
+
+function buildSetInsertPayload(workoutExerciseId: string, setOrder: number, defaultSet: WorkoutSet | null) {
+  return {
+    workout_exercise_id: workoutExerciseId,
+    set_order: setOrder,
+    weight: defaultSet?.weight ?? null,
+    reps: defaultSet?.reps ?? null,
+  }
 }
 
 function applyRoutineOrder(routines: Routine[], routineOrder: string[]) {
