@@ -111,6 +111,28 @@ def test_exercisedb_provider_normalizes_current_api_fields() -> None:
     assert exercise.body_part == "Waist"
     assert exercise.equipment == "Body Weight"
     assert exercise.secondary_muscles == ["Hip Flexors"]
+    assert exercise.image_url == "/api/exercise-images/0001?resolution=180"
+    assert exercise.thumbnail_url == "/api/exercise-images/0001?resolution=180"
+
+
+def test_exercisedb_provider_uses_proxy_image_url_over_provider_url() -> None:
+    settings = make_settings(
+        exercise_api_provider="exercisedb",
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+    )
+    provider = ExerciseDBProvider(settings)
+
+    exercise = provider._normalize(
+        {
+            "exerciseId": "0002",
+            "name": "push up",
+            "imageUrl": "https://provider.example/raw.gif",
+            "targetMuscles": ["chest"],
+        }
+    )
+
+    assert exercise.image_url == "/api/exercise-images/0002?resolution=180"
 
 
 @pytest.mark.asyncio
@@ -188,10 +210,7 @@ async def test_exercise_image_proxy_streams_provider_gif(
 async def test_exercise_image_proxy_serves_cached_image_without_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = make_settings(
-        exercise_api_key=SecretStr("rapidapi-key"),
-        exercise_api_host="exercisedb.p.rapidapi.com",
-    )
+    settings = make_settings()
     cache_dir = Path("pytest-cache-files-exercise-images-cached")
     shutil.rmtree(cache_dir, ignore_errors=True)
     monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
@@ -205,6 +224,30 @@ async def test_exercise_image_proxy_serves_cached_image_without_provider(
 
     assert response.media_type == "image/gif"
     assert response.body == b"GIF89a"
+
+
+@pytest.mark.asyncio
+async def test_exercise_image_proxy_caps_daily_provider_cache_misses(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+    )
+    FakeAsyncClient.requests = []
+    cache_dir = Path("pytest-cache-files-exercise-images-daily-limit")
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
+    monkeypatch.setattr(exercise_images, "IMAGE_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(exercise_images, "PROVIDER_DAILY_MISS_LIMIT", 0)
+    monkeypatch.setattr("app.routers.exercise_images.httpx.AsyncClient", FakeAsyncClient)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await exercise_images.get_exercise_image("0001", "180")
+    finally:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    assert exc_info.value.status_code == 429
+    assert FakeAsyncClient.requests == []
 
 
 @pytest.mark.asyncio

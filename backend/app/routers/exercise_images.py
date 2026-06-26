@@ -1,7 +1,9 @@
 """ExerciseDB image proxy endpoints."""
 
 import hashlib
+import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -17,6 +19,7 @@ EXERCISEDB_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ALLOWED_RESOLUTIONS = {"180", "360", "720", "1080"}
 IMAGE_CACHE_DIR = Path(".cache/exercise-images")
 CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+PROVIDER_DAILY_MISS_LIMIT = 500
 
 
 @router.get("/{external_id}")
@@ -31,10 +34,6 @@ async def get_exercise_image(
     if resolution not in ALLOWED_RESOLUTIONS:
         raise HTTPException(status_code=400, detail="Invalid image resolution.")
 
-    settings = get_settings()
-    if not settings.has_exercise_credentials:
-        raise HTTPException(status_code=503, detail="Exercise image provider is not configured.")
-
     cached = read_cached_image(external_id, resolution)
     if cached:
         content, content_type = cached
@@ -43,6 +42,13 @@ async def get_exercise_image(
             media_type=content_type,
             headers={"Cache-Control": f"public, max-age={CACHE_MAX_AGE_SECONDS}"},
         )
+
+    settings = get_settings()
+    if not settings.has_exercise_credentials:
+        raise HTTPException(status_code=503, detail="Exercise image provider is not configured.")
+
+    if not reserve_provider_miss():
+        raise HTTPException(status_code=429, detail="Exercise image provider daily cache-miss limit reached.")
 
     provider_client = ExerciseDBClient(settings)
     params = {"exerciseId": external_id, "resolution": resolution}
@@ -101,3 +107,24 @@ def cache_paths(external_id: str, resolution: str) -> tuple[Path, Path]:
 
     digest = hashlib.sha256(f"{external_id}:{resolution}".encode("utf-8")).hexdigest()
     return IMAGE_CACHE_DIR / f"{digest}.bin", IMAGE_CACHE_DIR / f"{digest}.type"
+
+
+def reserve_provider_miss() -> bool:
+    """Reserve one daily provider request for an uncached image fetch."""
+
+    today = datetime.now(UTC).date().isoformat()
+    state_path = IMAGE_CACHE_DIR / "daily-provider-misses.json"
+    count = 0
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if state.get("date") == today:
+                count = int(state.get("count", 0))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            count = 0
+    if count >= PROVIDER_DAILY_MISS_LIMIT:
+        return False
+
+    IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"date": today, "count": count + 1}), encoding="utf-8")
+    return True

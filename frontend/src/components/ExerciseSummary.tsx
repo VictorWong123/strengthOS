@@ -38,6 +38,7 @@ function ExerciseThumbnail({ exercise, onOpenDetails }: { exercise: Exercise; on
       type="button"
       className="flex h-[52px] w-[52px] shrink-0 items-center justify-center overflow-hidden rounded-button bg-surface-elevated text-[10px] text-zinc-500"
       onClick={() => onOpenDetails(exercise)}
+      aria-label={`Open ${exercise.name} details`}
     >
       <ExerciseMedia
         src={exercise.thumbnail_url}
