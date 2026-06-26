@@ -164,7 +164,7 @@ class ExerciseDBProvider(ExerciseProvider):
         body_parts = item.get("bodyParts") or ([item["bodyPart"]] if item.get("bodyPart") else [])
         target_muscles = item.get("targetMuscles") or ([item["target"]] if item.get("target") else [])
         secondary_muscles = item.get("secondaryMuscles") or []
-        image_url = item.get("imageUrl") or f"/api/exercise-images/{external_id}?resolution=180"
+        image_url = f"/api/exercise-images/{external_id}?resolution=180"
         video_url = item.get("videoUrl")
         return ProviderExercise(
             external_id=external_id,

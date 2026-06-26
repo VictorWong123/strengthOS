@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 type ExerciseMediaProps = {
-  src: string | null
+  src: string | string[] | null
   alt: string
   fallback: ReactNode
   className: string
@@ -23,18 +23,50 @@ export function ExerciseMedia({
   loading = 'lazy',
   decoding,
 }: ExerciseMediaProps) {
-  const [failed, setFailed] = useState(false)
-  const mediaUrl = failed ? null : resolveMediaUrl(src)
+  const containerRef = useRef<HTMLSpanElement | null>(null)
+  const [failedIndex, setFailedIndex] = useState(0)
+  const [isInView, setIsInView] = useState(loading === 'eager')
+  const sources = normalizeSources(src)
+  const sourceKey = sources.join('\n')
+  const resolvedUrl = resolveMediaUrl(sources[failedIndex] ?? null)
+  const shouldLoad = loading === 'eager' || isInView
+  const mediaUrl = !shouldLoad ? null : resolvedUrl
   const isVideo = Boolean(mediaUrl && /\.(mp4|webm|mov)(\?|#|$)/i.test(mediaUrl))
 
-  if (!mediaUrl) return fallback
+  useEffect(() => {
+    setFailedIndex(0)
+    setIsInView(loading === 'eager')
+  }, [loading, sourceKey])
+
+  useEffect(() => {
+    if (!resolvedUrl || loading === 'eager' || isInView) return
+    const element = containerRef.current
+    if (!element) return
+    if (!('IntersectionObserver' in window)) {
+      setIsInView(true)
+      return
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return
+        setIsInView(true)
+        observer.disconnect()
+      },
+      { rootMargin: '0px' },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [isInView, loading, resolvedUrl])
+
+  if (!mediaUrl) return <span ref={containerRef}>{fallback}</span>
 
   return isVideo ? (
     <video
       src={mediaUrl}
       controls={controls}
       preload="metadata"
-      onError={() => setFailed(true)}
+      onError={() => setFailedIndex((current) => current + 1)}
       className={videoClassName}
       aria-label={alt}
     />
@@ -44,10 +76,16 @@ export function ExerciseMedia({
       alt={alt}
       loading={loading}
       decoding={decoding}
-      onError={() => setFailed(true)}
+      onError={() => setFailedIndex((current) => current + 1)}
       className={className}
     />
   )
+}
+
+function normalizeSources(src: string | string[] | null): string[] {
+  if (!src) return []
+  const sources = Array.isArray(src) ? src : [src]
+  return sources.filter(Boolean)
 }
 
 function resolveMediaUrl(src: string | null): string | null {

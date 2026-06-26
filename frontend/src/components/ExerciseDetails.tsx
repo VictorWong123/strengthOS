@@ -39,7 +39,7 @@ export function ExerciseDetails({ exercise, sets, open = true, onClose, action }
         </div>
         <div className="overflow-hidden rounded-card border border-app-border bg-surface-elevated">
           <ExerciseMedia
-            src={exercise.animation_url ?? exercise.image_url}
+            src={[exercise.animation_url, exercise.image_url].filter(Boolean) as string[]}
             alt={`${exercise.name} demonstration`}
             controls
             className="max-h-96 w-full object-contain"
