@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { House, LogOut } from 'lucide-react'
+import { House, LogOut, Trash2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Field, IconButton, Input, MobileHeader, Pill, PrimaryButton, SecondaryButton, Select, SurfaceCard, Textarea } from './ui'
 
 const PROFILE_COLUMNS = 'id, display_name, first_name, last_name, age, body_weight_lbs, height_inches, training_goal, training_experience, limitations'
+const apiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
 
 type StatusMessage = {
   tone: 'warning' | 'danger' | 'success'
@@ -61,6 +62,10 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
   const [draft, setDraft] = useState<ProfileDraft>(EMPTY_PROFILE_DRAFT)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [deleteProgress, setDeleteProgress] = useState(0)
+  const [isDeleteConfirmed, setIsDeleteConfirmed] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const deleteSliderRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!session) {
@@ -251,8 +256,139 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
           Logout
         </SecondaryButton>
       </SurfaceCard>
+      <SurfaceCard className="space-y-4 border-red-500/30">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-300">
+            <Trash2 className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-red-100">Delete account</h2>
+            <p className="mt-1 text-sm text-text-secondary">This permanently removes your account and workout data.</p>
+          </div>
+        </div>
+        <div
+          ref={deleteSliderRef}
+          role="slider"
+          tabIndex={0}
+          aria-label="Confirm account deletion"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(deleteProgress * 100)}
+          className="relative h-14 touch-none rounded-button border border-white/10 bg-black/30 p-1 outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+          onKeyDown={(event) => {
+            if (event.key === 'Home') resetDeleteConfirmation()
+            if (event.key === 'End') confirmDeleteSlider()
+          }}
+        >
+          <div className="absolute inset-1 overflow-hidden rounded-[10px]">
+            <div
+              className="h-full bg-red-500/25"
+              style={{ width: `${Math.round(deleteProgress * 100)}%` }}
+            />
+          </div>
+          <div className="absolute inset-0 flex items-center justify-center px-14 text-sm font-semibold text-text-secondary">
+            {isDeleteConfirmed ? 'Release to confirm' : 'Drag to confirm'}
+          </div>
+          <div
+            className="absolute left-1 top-1 flex h-12 w-12 items-center justify-center rounded-[10px] bg-red-500 text-white shadow-lg transition-transform"
+            style={{ left: `calc(4px + ${deleteProgress * 100}% - ${deleteProgress * 56}px)` }}
+            onPointerDown={startDeleteSliderDrag}
+          >
+            <Trash2 className="h-5 w-5" aria-hidden="true" />
+          </div>
+        </div>
+        <PrimaryButton
+          className="w-full bg-accent-danger active:bg-red-600"
+          disabled={!isDeleteConfirmed || isDeleting}
+          onClick={() => void deleteAccount()}
+        >
+          {isDeleting ? 'Deleting' : 'Delete account'}
+        </PrimaryButton>
+      </SurfaceCard>
     </div>
   )
+
+  function startDeleteSliderDrag(event: PointerEvent<HTMLDivElement>) {
+    if (isDeleting) return
+    const thumb = event.currentTarget
+    thumb.setPointerCapture(event.pointerId)
+    updateDeleteSlider(event.clientX)
+    thumb.onpointermove = (moveEvent) => updateDeleteSlider(moveEvent.clientX)
+    thumb.onpointerup = (upEvent) => {
+      thumb.releasePointerCapture(upEvent.pointerId)
+      thumb.onpointermove = null
+      thumb.onpointerup = null
+      thumb.onpointercancel = null
+      setDeleteProgress((current) => {
+        if (current >= 0.98) {
+          setIsDeleteConfirmed(true)
+          return 1
+        }
+        setIsDeleteConfirmed(false)
+        return 0
+      })
+    }
+    thumb.onpointercancel = () => {
+      thumb.onpointermove = null
+      thumb.onpointerup = null
+      thumb.onpointercancel = null
+      resetDeleteConfirmation()
+    }
+  }
+
+  function updateDeleteSlider(clientX: number) {
+    const track = deleteSliderRef.current
+    if (!track) return
+    const rect = track.getBoundingClientRect()
+    const progress = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    setDeleteProgress(progress)
+    setIsDeleteConfirmed(progress >= 0.98)
+  }
+
+  function resetDeleteConfirmation() {
+    setDeleteProgress(0)
+    setIsDeleteConfirmed(false)
+  }
+
+  function confirmDeleteSlider() {
+    setDeleteProgress(1)
+    setIsDeleteConfirmed(true)
+  }
+
+  async function deleteAccount() {
+    if (!session || !isDeleteConfirmed) return
+
+    setIsDeleting(true)
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
+    if (sessionError || !token) {
+      setIsDeleting(false)
+      onStatus({ tone: 'danger', message: sessionError?.message ?? 'Sign in again before deleting your account.' })
+      return
+    }
+
+    let response: Response
+    try {
+      response = await fetch(`${apiUrl ?? '/api'}/account`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    } catch {
+      setIsDeleting(false)
+      resetDeleteConfirmation()
+      onStatus({ tone: 'danger', message: 'Account could not be deleted.' })
+      return
+    }
+
+    if (!response.ok) {
+      setIsDeleting(false)
+      resetDeleteConfirmation()
+      onStatus({ tone: 'danger', message: 'Account could not be deleted.' })
+      return
+    }
+
+    await supabase.auth.signOut()
+  }
 }
 
 function profileToDraft(profile: ProfileRow): ProfileDraft {

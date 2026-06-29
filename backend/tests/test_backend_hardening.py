@@ -15,7 +15,7 @@ from app.providers.factory import get_exercise_provider
 from app.providers.seed import SeedExerciseProvider
 from app.repositories import supabase_training as training_repository_module
 from app.repositories.supabase_training import TrainingRepository
-from app.routers import admin, exercise_images, oauth_metadata
+from app.routers import account, admin, exercise_images, oauth_metadata
 from app.services import supabase as supabase_module
 from app.services.exercise_sync import safe_error_message
 from app.services.supabase import SupabaseService
@@ -339,6 +339,10 @@ class FakeAsyncClient:
     async def patch(self, *args: object, **kwargs: object) -> FakeResponse:
         return FakeResponse([])
 
+    async def delete(self, url: str, **kwargs: object) -> FakeResponse:
+        self.requests.append({"url": url, **kwargs})
+        return FakeResponse({})
+
     async def aclose(self) -> None:
         type(self).closed = True
 
@@ -416,6 +420,49 @@ async def test_supabase_select_all_validates_page_size(monkeypatch: pytest.Monke
 
 def test_supabase_in_filter_quotes_special_values() -> None:
     assert SupabaseService.in_filter(["plain", "needs,quotes", "has(paren)"]) == 'in.(plain,"needs,quotes","has(paren)")'
+
+
+@pytest.mark.asyncio
+async def test_supabase_delete_auth_user_calls_admin_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeAsyncClient.requests = []
+    monkeypatch.setattr(supabase_module.httpx, "AsyncClient", FakeAsyncClient)
+    service = SupabaseService(make_settings())
+
+    try:
+        await service.delete_auth_user("user-1")
+    finally:
+        await service.aclose()
+
+    assert FakeAsyncClient.requests[0]["url"] == "https://example.supabase.co/auth/v1/admin/users/user-1"
+
+
+def test_delete_account_uses_authenticated_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(account, "get_settings", lambda: make_settings())
+
+    class FakeAccountSupabaseService:
+        def __init__(self, _settings: Settings) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeAccountSupabaseService":
+            return self
+
+        async def __aexit__(self, *_exc_info: object) -> None:
+            return None
+
+        async def delete_auth_user(self, user_id: str) -> None:
+            calls.append(user_id)
+
+    monkeypatch.setattr(account, "SupabaseService", FakeAccountSupabaseService)
+    app = app_main.create_app()
+    app.dependency_overrides[account.get_authenticated_user] = lambda: auth_dependencies.AuthenticatedUser(id="user-1")
+
+    with TestClient(app) as client:
+        response = client.delete("/account")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+    assert calls == ["user-1"]
 
 
 def test_extract_bearer_token_rejects_missing_or_empty_tokens() -> None:
