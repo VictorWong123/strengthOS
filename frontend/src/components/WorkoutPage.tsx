@@ -1,8 +1,12 @@
 import { AlertTriangle, ChevronDown, ClipboardPlus, FolderPlus, ListRestart, RefreshCw, Search, Settings2 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useRef, useState } from 'react'
+import type { MouseEvent, PointerEvent, ReactNode } from 'react'
 import type { Routine } from '../lib/types'
 import { RoutineCard, RoutineCardSkeleton, RoutineEmptyState, RoutineGroup, RoutineQuickAction } from './RoutineUI'
-import { DismissibleBanner, ErrorState, IconButton, MobileHeader, SecondaryButton, SectionHeader } from './ui'
+import { DismissibleBanner, ErrorState, IconButton, MobileHeader, SecondaryButton, SectionHeader, cn } from './ui'
+
+const ROUTINE_REORDER_HOLD_MS = 350
+const ROUTINE_REORDER_MOVE_TOLERANCE_PX = 8
 
 type WorkoutPageProps = {
   banners: ReactNode
@@ -20,6 +24,14 @@ type WorkoutPageProps = {
   onOpenRoutine: (routineId: string) => void
   onOpenRoutineMenu: (routineId: string) => void
   onStartRoutine: (routine: Routine) => void
+  onReorderRoutines: (routineIds: string[]) => void
+}
+
+type RoutineDragRef = {
+  id: string
+  pointerId: number
+  startY: number
+  isDragging: boolean
 }
 
 export function WorkoutPage({
@@ -38,7 +50,115 @@ export function WorkoutPage({
   onOpenRoutine,
   onOpenRoutineMenu,
   onStartRoutine,
+  onReorderRoutines,
 }: WorkoutPageProps) {
+  const [draggingRoutineId, setDraggingRoutineId] = useState<string | null>(null)
+  const [dragOffsetY, setDragOffsetY] = useState(0)
+  const itemRefs = useRef(new Map<string, HTMLDivElement>())
+  const dragRef = useRef<RoutineDragRef | null>(null)
+  const holdTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+  const suppressClickRoutineRef = useRef<string | null>(null)
+
+  function clearHoldTimer() {
+    if (!holdTimerRef.current) return
+    window.clearTimeout(holdTimerRef.current)
+    holdTimerRef.current = null
+  }
+
+  function setRoutineItemRef(routineId: string, node: HTMLDivElement | null) {
+    if (node) {
+      itemRefs.current.set(routineId, node)
+      return
+    }
+    itemRefs.current.delete(routineId)
+  }
+
+  function beginRoutineDrag(routineId: string) {
+    const drag = dragRef.current
+    if (!drag || drag.id !== routineId) return
+    drag.isDragging = true
+    setDragOffsetY(0)
+    setDraggingRoutineId(routineId)
+  }
+
+  function handleRoutinePointerDown(event: PointerEvent<HTMLDivElement>, routineId: string) {
+    if (event.button !== 0 || !event.isPrimary) return
+    if ((event.target as HTMLElement).closest('[data-routine-drag-ignore]')) return
+
+    clearHoldTimer()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = {
+      id: routineId,
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      isDragging: false,
+    }
+    holdTimerRef.current = window.setTimeout(() => beginRoutineDrag(routineId), ROUTINE_REORDER_HOLD_MS)
+  }
+
+  function handleRoutinePointerMove(event: PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    const deltaY = Math.abs(event.clientY - drag.startY)
+    if (!drag.isDragging) {
+      if (deltaY > ROUTINE_REORDER_MOVE_TOLERANCE_PX) {
+        clearHoldTimer()
+        dragRef.current = null
+      }
+      return
+    }
+
+    event.preventDefault()
+    setDragOffsetY(event.clientY - drag.startY)
+    const currentIndex = routines.findIndex((routine) => routine.id === drag.id)
+    if (currentIndex < 0) return
+
+    const itemCenters = routines
+      .filter((routine) => routine.id !== drag.id)
+      .map((routine) => {
+        const rect = itemRefs.current.get(routine.id)?.getBoundingClientRect()
+        return rect ? { centerY: rect.top + rect.height / 2 } : null
+      })
+      .filter((item): item is { centerY: number } => Boolean(item))
+
+    const firstAfterPointer = itemCenters.find((item) => event.clientY < item.centerY)
+    const nextIndex = firstAfterPointer ? itemCenters.indexOf(firstAfterPointer) : itemCenters.length
+    if (nextIndex === currentIndex) return
+
+    const nextRoutineIds = routines.map((routine) => routine.id)
+    const [target] = nextRoutineIds.splice(currentIndex, 1)
+    nextRoutineIds.splice(nextIndex, 0, target)
+    drag.startY = event.clientY
+    setDragOffsetY(0)
+    onReorderRoutines(nextRoutineIds)
+  }
+
+  function handleRoutinePointerEnd(event: PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    clearHoldTimer()
+    if (drag.isDragging) {
+      event.preventDefault()
+      event.stopPropagation()
+      suppressClickRoutineRef.current = drag.id
+      window.setTimeout(() => {
+        if (suppressClickRoutineRef.current === drag.id) suppressClickRoutineRef.current = null
+      }, 700)
+    }
+    dragRef.current = null
+    setDraggingRoutineId(null)
+    setDragOffsetY(0)
+  }
+
+  function handleRoutineClickCapture(event: MouseEvent<HTMLDivElement>, routineId: string) {
+    if (suppressClickRoutineRef.current !== routineId) return
+    event.preventDefault()
+    event.stopPropagation()
+    suppressClickRoutineRef.current = null
+  }
+
   return (
     <div className="space-y-6">
       <MobileHeader
@@ -108,14 +228,33 @@ export function WorkoutPage({
         ) : routines.length ? (
           <div className="space-y-3">
             {routines.map((routine) => (
-              <RoutineCard
+              <div
                 key={routine.id}
-                routine={routine}
-                summary={routineSummary(routine.id)}
-                onOpen={() => onOpenRoutine(routine.id)}
-                onOpenMenu={() => onOpenRoutineMenu(routine.id)}
-                onStart={() => onStartRoutine(routine)}
-              />
+                ref={(node) => setRoutineItemRef(routine.id, node)}
+                className={cn(
+                  'relative touch-pan-y transition-transform duration-150',
+                  draggingRoutineId === routine.id && 'z-20 cursor-grabbing select-none touch-none opacity-95 duration-0',
+                )}
+                style={
+                  draggingRoutineId === routine.id
+                    ? { transform: `translate3d(0, ${dragOffsetY}px, 0) scale(1.03)` }
+                    : undefined
+                }
+                onPointerDown={(event) => handleRoutinePointerDown(event, routine.id)}
+                onPointerMove={handleRoutinePointerMove}
+                onPointerUp={handleRoutinePointerEnd}
+                onPointerCancel={handleRoutinePointerEnd}
+                onClickCapture={(event) => handleRoutineClickCapture(event, routine.id)}
+              >
+                <RoutineCard
+                  routine={routine}
+                  summary={routineSummary(routine.id)}
+                  isReordering={draggingRoutineId === routine.id}
+                  onOpen={() => onOpenRoutine(routine.id)}
+                  onOpenMenu={() => onOpenRoutineMenu(routine.id)}
+                  onStart={() => onStartRoutine(routine)}
+                />
+              </div>
             ))}
           </div>
         ) : (

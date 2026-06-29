@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from app.auth.dependencies import extract_bearer_token, verify_supabase_token
 from app.config import get_settings
 from app.mcp.server import create_mcp_app
-from app.routers import admin, exercise_images, health, oauth_metadata
+from app.routers import account, admin, exercise_images, health, oauth_metadata
 
 
 def create_app() -> FastAPI:
@@ -24,11 +24,12 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.allowed_frontend_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["authorization", "content-type", "x-admin-key"],
     )
     app.include_router(health.router)
     app.include_router(oauth_metadata.router)
+    app.include_router(account.router)
     app.include_router(admin.router)
     app.include_router(exercise_images.router)
     app.mount("/mcp", mcp_app)

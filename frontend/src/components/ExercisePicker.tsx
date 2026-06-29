@@ -161,6 +161,7 @@ function ExerciseListItem({
     <SurfaceCard className="p-3">
       <ExerciseSummary
         exercise={exercise}
+        showThumbnail={false}
         onOpenDetails={onOpenDetails}
         action={
           <IconButton aria-label={`${actionLabel} ${exercise.name}`} onClick={() => onSelect(exercise)}>

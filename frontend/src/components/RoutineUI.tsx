@@ -6,9 +6,9 @@ import {
   GripVertical,
   Pencil,
   Copy,
+  Play,
   ArrowUp,
   ArrowDown,
-  Play,
 } from 'lucide-react'
 import type { ElementType, ReactNode } from 'react'
 import type { Exercise, Routine, RoutineExercise } from '../lib/types'
@@ -32,6 +32,7 @@ type RoutineCardProps = {
   routine: Routine
   summary: string
   disabled?: boolean
+  isReordering?: boolean
   onOpen: () => void
   onStart: () => void
   onOpenMenu: () => void
@@ -122,19 +123,25 @@ export function RoutineGroup({ title, count, expanded, onToggle, children }: Rou
   )
 }
 
-export function RoutineCard({ routine, summary, disabled = false, onOpen, onStart, onOpenMenu }: RoutineCardProps) {
+export function RoutineCard({ routine, summary, disabled = false, isReordering = false, onOpen, onStart, onOpenMenu }: RoutineCardProps) {
   return (
-    <SurfaceCard className={cn('space-y-4 p-4', disabled && 'opacity-60')}>
+    <SurfaceCard
+      className={cn(
+        'space-y-4 p-4 transition-colors',
+        disabled && 'opacity-60',
+        isReordering && 'border-accent-blue bg-surface-elevated shadow-panel ring-2 ring-accent-blue/40',
+      )}
+    >
       <div className="flex items-start gap-3">
         <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
           <h4 className="truncate text-xl font-semibold">{routine.name}</h4>
           <p className="mt-2 line-clamp-2 text-sm text-text-secondary">{summary}</p>
         </button>
-        <IconButton aria-label={`Open ${routine.name} options`} onClick={onOpenMenu}>
+        <IconButton data-routine-drag-ignore aria-label={`Open ${routine.name} options`} onClick={onOpenMenu}>
           <Ellipsis className="h-5 w-5" aria-hidden="true" />
         </IconButton>
       </div>
-      <PrimaryButton className="w-full" disabled={disabled} onClick={onStart}>
+      <PrimaryButton data-routine-drag-ignore className="w-full" disabled={disabled} onClick={onStart}>
         <Play className="h-4 w-4" aria-hidden="true" />
         Start Routine
       </PrimaryButton>
@@ -170,28 +177,18 @@ export function RoutineEmptyState({ onCreate }: { onCreate: () => void }) {
 }
 
 export function RoutineActionList({
-  canMoveUp,
-  canMoveDown,
   onEdit,
   onDuplicate,
-  onMoveUp,
-  onMoveDown,
   onDelete,
 }: {
-  canMoveUp: boolean
-  canMoveDown: boolean
   onEdit: () => void
   onDuplicate: () => void
-  onMoveUp: () => void
-  onMoveDown: () => void
   onDelete: () => void
 }) {
   return (
     <div className="space-y-2">
       <ActionButton icon={Pencil} label="Edit" onClick={onEdit} />
       <ActionButton icon={Copy} label="Duplicate" onClick={onDuplicate} />
-      <ActionButton icon={ArrowUp} label="Move Up" onClick={onMoveUp} disabled={!canMoveUp} />
-      <ActionButton icon={ArrowDown} label="Move Down" onClick={onMoveDown} disabled={!canMoveDown} />
       <DeleteTextButton
         label="Delete"
         onClick={onDelete}

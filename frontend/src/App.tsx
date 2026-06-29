@@ -172,9 +172,18 @@ export function App() {
     return map
   }, [setsByWorkoutExerciseId, workoutById, workoutExercises])
 
-  const completedWorkouts = useMemo(() => workouts.filter((workout) => workout.completed_at), [workouts])
+  const completedWorkouts = useMemo(
+    () =>
+      workouts
+        .filter((workout) => workout.completed_at)
+        .sort((left, right) => workoutDateMs(right) - workoutDateMs(left)),
+    [workouts],
+  )
   const weeklyCompletedWorkouts = useMemo(
-    () => completedWorkouts.filter((workout) => Date.now() - new Date(workout.completed_at ?? workout.started_at).getTime() <= 7 * 24 * 60 * 60 * 1000),
+    () => {
+      const weekStart = startOfCurrentSunday().getTime()
+      return completedWorkouts.filter((workout) => workoutDateMs(workout) >= weekStart)
+    },
     [completedWorkouts],
   )
   const weeklySummary = useMemo(() => {
@@ -733,20 +742,10 @@ export function App() {
     setStatus({ tone: 'success', message: `${target.name} deleted.` })
   }
 
-  function moveRoutine(routineId: string, direction: -1 | 1) {
-    setRoutineOrder((current) => {
-      const ids = mergeRoutineOrder(current, routines.map((routine) => routine.id))
-      const index = ids.indexOf(routineId)
-      const nextIndex = index + direction
-      if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return ids
-
-      const next = [...ids]
-      const [target] = next.splice(index, 1)
-      next.splice(nextIndex, 0, target)
-      persistRoutineOrder(session?.user.id, next)
-      return next
-    })
-    setStatus({ tone: 'warning', message: 'Routine order saved locally on this device. Backend has no persistent routine order field yet.' })
+  function reorderRoutines(routineIds: string[]) {
+    const next = mergeRoutineOrder(routineIds, routines.map((routine) => routine.id))
+    persistRoutineOrder(session?.user.id, next)
+    setRoutineOrder(next)
   }
 
   function dismissReorderHint() {
@@ -994,12 +993,8 @@ export function App() {
       >
         {routineActionTarget ? (
           <RoutineActionList
-            canMoveUp={orderedRoutines.findIndex((routine) => routine.id === routineActionTarget.id) > 0}
-            canMoveDown={orderedRoutines.findIndex((routine) => routine.id === routineActionTarget.id) < orderedRoutines.length - 1}
             onEdit={() => openRoutineForEdit(routineActionTarget.id)}
             onDuplicate={() => void duplicateRoutine(routineActionTarget)}
-            onMoveUp={() => moveRoutine(routineActionTarget.id, -1)}
-            onMoveDown={() => moveRoutine(routineActionTarget.id, 1)}
             onDelete={() => setRoutineToDelete(routineActionTarget)}
           />
         ) : null}
@@ -1106,6 +1101,7 @@ export function App() {
             onOpenRoutine={openRoutineForEdit}
             onOpenRoutineMenu={setSelectedRoutineId}
             onStartRoutine={(routine) => void startRoutineWorkout(routine)}
+            onReorderRoutines={reorderRoutines}
           />
         )
 
@@ -1249,6 +1245,17 @@ function groupBy<T>(items: T[], getKey: (item: T) => string, sort?: (left: T, ri
     map.set(key, sort ? group.sort(sort) : group)
   }
   return map
+}
+
+function workoutDateMs(workout: Workout) {
+  return new Date(workout.completed_at ?? workout.started_at).getTime()
+}
+
+function startOfCurrentSunday() {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  date.setDate(date.getDate() - date.getDay())
+  return date
 }
 
 function buildSetInsertPayload(workoutExerciseId: string, setOrder: number, defaultSet: WorkoutSet | null) {

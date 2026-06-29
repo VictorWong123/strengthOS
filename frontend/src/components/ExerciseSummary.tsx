@@ -8,13 +8,21 @@ type ExerciseSummaryProps = {
   detail?: ReactNode
   action?: ReactNode
   className?: string
+  showThumbnail?: boolean
   onOpenDetails: (exercise: Exercise) => void
 }
 
-export function ExerciseSummary({ exercise, detail, action, className, onOpenDetails }: ExerciseSummaryProps) {
+export function ExerciseSummary({
+  exercise,
+  detail,
+  action,
+  className,
+  showThumbnail = true,
+  onOpenDetails,
+}: ExerciseSummaryProps) {
   return (
     <div className={cn('flex min-h-[72px] items-center gap-3', className)}>
-      <ExerciseThumbnail exercise={exercise} onOpenDetails={onOpenDetails} />
+      {showThumbnail ? <ExerciseThumbnail exercise={exercise} onOpenDetails={onOpenDetails} /> : null}
       <button
         type="button"
         className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card"

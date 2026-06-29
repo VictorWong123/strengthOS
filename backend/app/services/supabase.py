@@ -21,7 +21,9 @@ class SupabaseService:
 
         if not settings.has_supabase_credentials:
             raise ValueError("Supabase service credentials are required.")
-        self.rest_url = f"{settings.supabase_url.rstrip('/')}/rest/v1"
+        supabase_origin = settings.supabase_url.rstrip("/")
+        self.rest_url = f"{supabase_origin}/rest/v1"
+        self.auth_url = f"{supabase_origin}/auth/v1"
         token = settings.supabase_service_role_key.get_secret_value()
         self.headers = {
             "apikey": token,
@@ -63,6 +65,17 @@ class SupabaseService:
             params={"id": f"eq.{row_id}"},
             json=payload,
         )
+        response.raise_for_status()
+
+    async def delete_auth_user(self, user_id: str) -> None:
+        """Delete a Supabase Auth user by id using the service-role key.
+
+        Supabase cascades owned application rows through foreign keys that
+        reference ``auth.users(id)``. Callers must authenticate the user before
+        passing an id here.
+        """
+
+        response = await self._client.delete(f"{self.auth_url}/admin/users/{user_id}")
         response.raise_for_status()
 
     async def upsert(
