@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
 import { IconButton } from './IconButton'
 import { useOverlayBehavior } from './overlayBehavior'
+import { cn } from './utils'
 
 type BottomSheetProps = {
   open: boolean
@@ -12,9 +13,23 @@ type BottomSheetProps = {
   children: ReactNode
   footer?: ReactNode
   headerAction?: ReactNode
+  className?: string
+  contentClassName?: string
+  position?: 'bottom' | 'top'
 }
 
-export function BottomSheet({ open, onClose, title, description, children, footer, headerAction }: BottomSheetProps) {
+export function BottomSheet({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  footer,
+  headerAction,
+  className,
+  contentClassName,
+  position = 'bottom',
+}: BottomSheetProps) {
   const titleId = useId()
   const descriptionId = useId()
   const containerRef = useOverlayBehavior(open, onClose)
@@ -23,7 +38,14 @@ export function BottomSheet({ open, onClose, title, description, children, foote
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-black/70" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="absolute inset-x-0 bottom-0 mx-auto max-w-[760px] px-3 pb-[max(18px,env(safe-area-inset-bottom))]">
+      <div
+        className={cn(
+          'absolute inset-x-0 mx-auto max-w-[760px] px-3',
+          position === 'top'
+            ? 'top-[max(18px,env(safe-area-inset-top))]'
+            : 'bottom-0 pb-[max(18px,env(safe-area-inset-bottom))]',
+        )}
+      >
         <div
           ref={containerRef}
           role="dialog"
@@ -31,7 +53,10 @@ export function BottomSheet({ open, onClose, title, description, children, foote
           aria-labelledby={titleId}
           aria-describedby={description ? descriptionId : undefined}
           tabIndex={-1}
-          className="flex max-h-[92dvh] flex-col overflow-hidden rounded-modal border border-white/10 bg-surface-card shadow-panel outline-none"
+          className={cn(
+            'flex max-h-[92dvh] flex-col overflow-hidden rounded-modal border border-white/10 bg-surface-card shadow-panel outline-none',
+            className,
+          )}
         >
           <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-white/15" aria-hidden="true" />
           <div className="shrink-0 flex items-start justify-between gap-4 px-4 pb-4 pt-3">
@@ -52,7 +77,7 @@ export function BottomSheet({ open, onClose, title, description, children, foote
               </IconButton>
             </div>
           </div>
-          <div className="scrollable-touch min-h-0 flex-1 overflow-y-auto px-4 pb-4">{children}</div>
+          <div className={cn('scrollable-touch min-h-0 flex-1 overflow-y-auto px-4 pb-4', contentClassName)}>{children}</div>
           {footer ? <div className="shrink-0 border-t border-white/10 px-4 py-4">{footer}</div> : null}
         </div>
       </div>

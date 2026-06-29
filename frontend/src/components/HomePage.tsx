@@ -35,9 +35,8 @@ export function HomePage({
   onOpenProfile,
 }: HomePageProps) {
   const [selectedWorkout, setSelectedWorkout] = useState<Workout | null>(null)
-  const recentWorkout = completedWorkouts[0] ?? null
+  const recentWorkouts = completedWorkouts.slice(0, 5)
   const selectedWorkoutDetails = useWorkoutDetails(selectedWorkout, workoutExercises, sets, exerciseById)
-  const recentWorkoutDetails = useWorkoutDetails(recentWorkout, workoutExercises, sets, exerciseById)
 
   return (
     <div className="space-y-6">
@@ -61,37 +60,25 @@ export function HomePage({
       </SurfaceCard>
 
       <SurfaceCard className="p-0">
-        <button
-          type="button"
-          className="flex w-full items-start justify-between gap-4 rounded-card p-4 text-left transition active:bg-surface-elevated disabled:cursor-default disabled:active:bg-transparent"
-          onClick={() => recentWorkout && setSelectedWorkout(recentWorkout)}
-          disabled={!recentWorkout}
-        >
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-semibold">Recent Workout</h2>
-              {recentWorkout ? <ChevronRight className="h-5 w-5 shrink-0 text-text-muted" aria-hidden="true" /> : null}
+        <div className="p-4">
+          <h2 className="text-xl font-semibold">Recent Workouts</h2>
+          {recentWorkouts.length ? (
+            <div className="mt-3 divide-y divide-white/10">
+              {recentWorkouts.map((workout) => (
+                <RecentWorkoutRow
+                  key={workout.id}
+                  workout={workout}
+                  workoutExercises={workoutExercises}
+                  sets={sets}
+                  exerciseById={exerciseById}
+                  onSelect={setSelectedWorkout}
+                />
+              ))}
             </div>
-            {recentWorkout ? (
-              <div className="mt-3 space-y-2">
-                <p className="truncate text-base font-semibold">{recentWorkout.name || 'Workout'}</p>
-                <div className="flex flex-wrap gap-2 text-sm text-text-secondary">
-                  <span className="inline-flex items-center gap-1">
-                    <CalendarDays className="h-4 w-4" aria-hidden="true" />
-                    {formatWorkoutDate(recentWorkout)}
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <Dumbbell className="h-4 w-4" aria-hidden="true" />
-                    {recentWorkoutDetails.length} exercises
-                  </span>
-                </div>
-                <p className="line-clamp-2 text-sm text-text-secondary">{summarizeWorkout(recentWorkoutDetails)}</p>
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-text-secondary">Finish a workout to see it here.</p>
-            )}
-          </div>
-        </button>
+          ) : (
+            <p className="mt-2 text-sm text-text-secondary">Finish a workout to see it here.</p>
+          )}
+        </div>
       </SurfaceCard>
 
       <BottomSheet
@@ -99,10 +86,52 @@ export function HomePage({
         onClose={() => setSelectedWorkout(null)}
         title={selectedWorkout?.name || 'Workout'}
         description={selectedWorkout ? formatWorkoutDate(selectedWorkout) : undefined}
+        className="h-[min(78dvh,720px)]"
+        position="top"
       >
         <WorkoutDetails details={selectedWorkoutDetails} />
       </BottomSheet>
     </div>
+  )
+}
+
+function RecentWorkoutRow({
+  workout,
+  workoutExercises,
+  sets,
+  exerciseById,
+  onSelect,
+}: {
+  workout: Workout
+  workoutExercises: WorkoutExercise[]
+  sets: WorkoutSet[]
+  exerciseById: Map<string, Exercise>
+  onSelect: (workout: Workout) => void
+}) {
+  const details = useWorkoutDetails(workout, workoutExercises, sets, exerciseById)
+
+  return (
+    <button
+      type="button"
+      className="flex w-full items-start justify-between gap-4 py-3 text-left transition first:pt-0 last:pb-0 active:bg-surface-elevated"
+      onClick={() => onSelect(workout)}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-base font-semibold">{workout.name || 'Workout'}</p>
+        <div className="mt-2 flex flex-wrap gap-2 text-sm text-text-secondary">
+          <span className="inline-flex items-center gap-1">
+            <CalendarDays className="h-4 w-4" aria-hidden="true" />
+            {formatWorkoutDate(workout)}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Dumbbell className="h-4 w-4" aria-hidden="true" />
+            {details.length} exercises
+          </span>
+        </div>
+        <p className="mt-2 line-clamp-2 text-sm text-text-secondary">{summarizeWorkout(details)}</p>
+      </div>
+      <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-text-muted" aria-hidden="true" />
+    </button>
   )
 }
 
