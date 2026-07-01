@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Local Codex Memory
+
+Use `.agent-review/` alongside this file for local review memory, incident summaries, and approved insights. Before code reviews, repeated-mistake analysis, or `$insights`/`$agent-review` workflows, inspect relevant files under `.agent-review/` when present and apply approved lessons. Do not commit generated review payloads, imported transcripts, secrets, or private memory files; only commit the scaffold files intentionally kept by `.gitignore`.
+
 ## Project Shape
 
 strengthOS has three main areas:

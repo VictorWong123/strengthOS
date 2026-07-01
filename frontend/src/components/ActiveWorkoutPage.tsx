@@ -48,11 +48,13 @@ export function ActiveWorkoutPage({
   onUpdateWorkout,
 }: ActiveWorkoutPageProps) {
   return (
-    <div className="space-y-6">
-      <MobileHeader
-        title={<h1 className="text-3xl font-bold tracking-tight">Active Workout</h1>}
-        subtitle="Keep logging. Progress saves to the existing workout tables."
-      />
+    <div className={workout ? 'space-y-6 pt-[86px]' : 'space-y-6'}>
+      {workout ? null : (
+        <MobileHeader
+          title={<h1 className="text-3xl font-bold tracking-tight">Active Workout</h1>}
+          subtitle="Keep logging. Progress saves to the existing workout tables."
+        />
+      )}
       {banners}
       <WorkoutLogger
         isLoading={isLoading}

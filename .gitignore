@@ -21,3 +21,10 @@ pytest-cache-files-*/
 
 
 test-account.txt
+
+# Local Codex review and insight memory. Keep scaffolding tracked, ignore payloads.
+.agent-review/**
+!.agent-review/
+!.agent-review/README.md
+!.agent-review/**/
+!.agent-review/**/.gitkeep
