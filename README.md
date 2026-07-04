@@ -117,11 +117,17 @@ The backend validates that token with Supabase Auth, derives the authenticated u
 
 ### Connect ChatGPT
 
-Add strengthOS as a custom MCP connector or remote MCP server with:
+In ChatGPT, open:
+
+```text
+Settings > Apps > Create app
+```
+
+Create a custom app/connector with:
 
 ```text
 Name: strengthOS
-URL: https://strengthos.onrender.com/mcp
+MCP server URL: https://strengthos.onrender.com/mcp
 ```
 
 Do not paste bearer tokens into ChatGPT for normal use. Unauthenticated requests to `/mcp` return a `401` bearer challenge with this protected-resource metadata URL:
@@ -136,7 +142,26 @@ That metadata tells the client that the MCP resource is `https://strengthos.onre
 https://strength-os-nu.vercel.app/oauth/consent
 ```
 
-For API usage through OpenAI Responses, configure the MCP tool with the hosted server URL:
+### Connect Codex
+
+Add strengthOS to Codex as a hosted MCP server:
+
+```bash
+codex mcp add strengthos --url https://strengthos.onrender.com/mcp
+codex mcp login strengthos --scopes openid,email,profile
+```
+
+If OAuth login is not available in your Codex environment, configure a bearer token from an environment variable:
+
+```bash
+export STRENGTHOS_SUPABASE_ACCESS_TOKEN=<supabase_access_token>
+codex mcp add strengthos --url https://strengthos.onrender.com/mcp \
+  --bearer-token-env-var STRENGTHOS_SUPABASE_ACCESS_TOKEN
+```
+
+### Connect With OpenAI Responses
+
+For direct API usage through OpenAI Responses, configure the MCP tool with the hosted server URL:
 
 ```python
 tools=[{
