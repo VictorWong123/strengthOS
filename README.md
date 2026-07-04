@@ -43,7 +43,6 @@ EXERCISE_API_MAX_RETRY_DELAY_SECONDS=30
 Never put the Supabase service-role key or ExerciseDB credentials in frontend code.
 
 For production deployment, see `DEPLOYMENT.md`.
-For the deployed ChatGPT MCP connector settings, see `CHATGPT_MCP.md`.
 
 ## Setup
 
@@ -94,42 +93,98 @@ Use `EXERCISE_API_PROVIDER=seed` for the bundled local catalog. Use `EXERCISE_AP
 
 ## MCP
 
-FastMCP is mounted at:
+strengthOS exposes a remote MCP server for read-only workout analytics.
+
+Production MCP endpoint:
+
+```text
+https://strengthos.onrender.com/mcp
+```
+
+Local development MCP endpoint:
 
 ```text
 http://localhost:8000/mcp
 ```
 
-Clients must send:
+The MCP server uses the remote HTTP transport provided by FastMCP. Every tool call must be authenticated as a strengthOS user:
 
 ```text
 Authorization: Bearer <supabase_access_token>
 ```
 
-The backend validates that token with Supabase Auth and never accepts a client-provided `user_id`. Tools are read-only and query Supabase through shared backend services. Profile-aware recommendation tools can call `get_user_profile` or the broader `get_user_training_context`.
+The backend validates that token with Supabase Auth, derives the authenticated user id, and never accepts a client-provided `user_id`. Tools are read-only and query Supabase through shared backend services.
 
-For ChatGPT, users should not paste bearer tokens. ChatGPT discovers the OAuth configuration from:
+### Connect ChatGPT
+
+Add strengthOS as a custom MCP connector or remote MCP server with:
+
+```text
+Name: strengthOS
+URL: https://strengthos.onrender.com/mcp
+```
+
+Do not paste bearer tokens into ChatGPT for normal use. Unauthenticated requests to `/mcp` return a `401` bearer challenge with this protected-resource metadata URL:
 
 ```text
 https://strengthos.onrender.com/.well-known/oauth-protected-resource
 ```
 
-Unauthenticated `/mcp` requests return a `401` bearer challenge that points to that metadata endpoint. Supabase OAuth then redirects users through the frontend consent page:
+That metadata tells the client that the MCP resource is `https://strengthos.onrender.com/mcp`, the authorization server is Supabase Auth, and supported scopes are `openid`, `email`, and `profile`. The OAuth flow redirects through the frontend consent page:
 
 ```text
 https://strength-os-nu.vercel.app/oauth/consent
 ```
 
-Example OpenAI Responses MCP configuration:
+For API usage through OpenAI Responses, configure the MCP tool with the hosted server URL:
 
 ```python
 tools=[{
     "type": "mcp",
     "server_label": "strengthos",
-    "server_url": "https://your-backend.example.com/mcp/",
+    "server_url": "https://strengthos.onrender.com/mcp",
     "headers": {"Authorization": f"Bearer {access_token}"},
 }]
 ```
+
+### Connect Claude
+
+In Claude's custom connectors UI, add a custom web connector with:
+
+```text
+Name: strengthOS
+Remote MCP server URL: https://strengthos.onrender.com/mcp
+```
+
+Then connect/authenticate the connector when Claude prompts. Team and Enterprise workspaces may require an owner to add the connector before members can connect it.
+
+For Claude Code, add the hosted HTTP MCP server:
+
+```bash
+claude mcp add --transport http strengthos https://strengthos.onrender.com/mcp
+```
+
+If your Claude client does not complete OAuth discovery, provide a current Supabase access token explicitly:
+
+```bash
+claude mcp add --transport http strengthos https://strengthos.onrender.com/mcp \
+  --header "Authorization: Bearer <supabase_access_token>"
+```
+
+### Available Tools/endpoints
+
+- `get_recent_workouts`
+- `get_workout`
+- `get_exercise_history`
+- `get_strength_progress`
+- `get_weekly_training_summary`
+- `get_volume_by_muscle_group`
+- `get_personal_records`
+- `find_stagnating_exercises`
+- `find_undertrained_muscle_groups`
+- `get_current_routines`
+- `get_user_profile`
+- `get_user_training_context`
 
 ## Testing
 
