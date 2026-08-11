@@ -250,6 +250,14 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
           </PrimaryButton>
         </div>
       </SurfaceCard>
+      <SurfaceCard className="space-y-3">
+        <div>
+          <h2 className="text-xl font-semibold">Help &amp; legal</h2>
+          <p className="mt-1 text-sm text-text-secondary">Support and privacy information.</p>
+        </div>
+        <SecondaryButton className="w-full" onClick={() => onNavigate('/support')}>Support</SecondaryButton>
+        <SecondaryButton className="w-full" onClick={() => onNavigate('/privacy')}>Privacy</SecondaryButton>
+      </SurfaceCard>
       <SurfaceCard>
         <SecondaryButton className="w-full" onClick={() => supabase.auth.signOut()}>
           <LogOut className="h-4 w-4" aria-hidden="true" />

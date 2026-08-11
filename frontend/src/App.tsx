@@ -9,6 +9,7 @@ import { ExercisesPage } from './components/ExercisesPage'
 import { HomePage } from './components/HomePage'
 import { OAuthConsentPage } from './components/OAuthConsentPage'
 import { ProfilePage } from './components/ProfilePage'
+import { PrivacyPage, SupportPage } from './components/PublicInfoPages'
 import { RoutineEditorPage } from './components/RoutineEditorPage'
 import { RoutineActionList } from './components/RoutineUI'
 import { WorkoutPage } from './components/WorkoutPage'
@@ -42,6 +43,8 @@ type Route =
   | { name: 'analytics'; pathname: '/analytics' }
   | { name: 'exercises'; pathname: '/exercises' }
   | { name: 'profile'; pathname: '/profile' }
+  | { name: 'privacy'; pathname: '/privacy' }
+  | { name: 'support'; pathname: '/support' }
   | { name: 'login'; pathname: '/login' }
   | { name: 'oauth-consent'; pathname: '/oauth/consent' }
   | { name: 'routine-new'; pathname: '/routines/new' }
@@ -959,6 +962,13 @@ export function App() {
 
   const routineActionTarget = selectedRoutineId ? orderedRoutines.find((routine) => routine.id === selectedRoutineId) ?? null : null
 
+  if (route.name === 'privacy' || route.name === 'support') {
+    return (
+      <AppShell currentPath={route.pathname} onNavigate={navigate} hideNavigation>
+        {route.name === 'privacy' ? <PrivacyPage onNavigate={navigate} /> : <SupportPage onNavigate={navigate} />}
+      </AppShell>
+    )
+  }
   if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} isAuthLoading={isAuthLoading} onNavigate={navigate} />
   if (session && route.name === 'login') {
     return <LoginSessionRedirect />
@@ -1226,6 +1236,8 @@ function parseRoute(pathname: string): Route {
   if (pathname === '/analytics') return { name: 'analytics', pathname }
   if (pathname === '/exercises') return { name: 'exercises', pathname }
   if (pathname === '/profile') return { name: 'profile', pathname }
+  if (pathname === '/privacy') return { name: 'privacy', pathname }
+  if (pathname === '/support') return { name: 'support', pathname }
   if (pathname === '/login') return { name: 'login', pathname }
   if (pathname === '/oauth/consent') return { name: 'oauth-consent', pathname }
   if (pathname === '/routines/new') return { name: 'routine-new', pathname }

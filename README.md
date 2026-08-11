@@ -256,3 +256,58 @@ uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 ```
 
 Render should expose `/health` and `/mcp` from the same backend process.
+
+## iPhone app (Capacitor)
+
+strengthOS uses Capacitor to package the existing React app for iPhone. The React source, Supabase data, and FastAPI backend remain shared with the web app—there is no separate mobile frontend.
+
+### Windows: shared app development
+
+Use Windows for normal React work. Do not generate the Xcode project here.
+
+```bash
+cd frontend
+npm ci
+npm run test:return-to
+npm run build
+```
+
+### Mac: generate and open iOS
+
+On a Mac with Xcode installed, work from the feature branch and generate the native project once:
+
+```bash
+git checkout feat/ios-app
+git pull
+cd frontend
+npm ci
+npm run build
+npx cap add ios
+npm run ios:sync
+npm run ios:open
+```
+
+Commit the generated `frontend/ios/` project after `npx cap add ios`; keep the Xcode project, workspace, and lockfiles tracked. Do not add `server.url` to Capacitor: the app must package `dist/`, not display the deployed website in a wrapper.
+
+In Xcode, set version `1.0.0`, build `1`, iPhone portrait support, and an iOS 15 deployment target. Set up automatic signing with an Apple Developer account, test on a physical iPhone, upload the archive to TestFlight, and submit the tested build for manual App Store release. Use bundle ID `io.github.victorwong123.strengthos`; if it is unavailable in Apple Developer, choose a unique replacement before creating the App ID and update `frontend/capacitor.config.ts` to match.
+
+### Production configuration
+
+Create an ignored `frontend/.env.production.local` with the existing production Supabase URL and publishable key plus:
+
+```text
+VITE_API_URL=https://strengthos.onrender.com
+```
+
+Do not put service-role keys, admin keys, or ExerciseDB credentials in this file. On Render, keep `FRONTEND_URL=https://strength-os-nu.vercel.app` and set `FRONTEND_ORIGIN=capacitor://localhost`. Verify the native CORS preflight after deployment:
+
+```bash
+curl -i -X OPTIONS https://strengthos.onrender.com/account -H "Origin: capacitor://localhost" -H "Access-Control-Request-Method: DELETE"
+```
+
+### Store release checklist
+
+- The public privacy and support pages are available at `https://strength-os-nu.vercel.app/privacy` and `https://strength-os-nu.vercel.app/support` through the existing Vercel rewrite.
+- In Xcode, add `frontend/resources/app-icon.png` to the App Icon asset and `frontend/resources/splash.png` to the launch-screen asset. The editable SVG sources are beside the PNGs.
+- Create a dedicated App Review account with safe sample workout data and provide its sign-in instructions in App Store Connect.
+- Prepare iPhone screenshots, Health & Fitness metadata, the privacy details, the encryption questionnaire, and TestFlight release notes from the actual shipped behavior.

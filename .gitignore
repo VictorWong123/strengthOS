@@ -19,5 +19,10 @@ pytest-cache-files-*/
 *.sqlite
 *.sqlite3
 
+# Capacitor iOS generated web assets and build dependencies. Keep Xcode projects, workspaces, and lockfiles tracked.
+frontend/ios/App/App/public/
+frontend/ios/App/Pods/
+frontend/ios/App/build/
+
 
 test-account.txt

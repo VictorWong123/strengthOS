@@ -56,7 +56,7 @@ export function WorkoutPage({
   const [dragOffsetY, setDragOffsetY] = useState(0)
   const itemRefs = useRef(new Map<string, HTMLDivElement>())
   const dragRef = useRef<RoutineDragRef | null>(null)
-  const holdTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+  const holdTimerRef = useRef<number | null>(null)
   const suppressClickRoutineRef = useRef<string | null>(null)
 
   function clearHoldTimer() {
