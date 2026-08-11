@@ -69,7 +69,7 @@ export function PrivacyPage({ onNavigate }: PublicPageProps) {
         <section aria-labelledby="privacy-data-title">
           <h2 id="privacy-data-title" className="text-xl font-semibold">Data used by strengthOS</h2>
           <ul className="mt-2 list-disc space-y-2 pl-5 text-sm text-text-secondary">
-            <li>Supabase stores your email, password authentication, and session information.</li>
+            <li>Supabase manages email/password authentication and stores your email and session information.</li>
             <li>Your optional profile information can include body metrics, training goals, experience, and limitations.</li>
             <li>Your workouts, routines, exercises, and sets are stored to provide your training history.</li>
             <li>Local preferences, such as dismissed interface hints, stay on your device.</li>

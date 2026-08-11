@@ -274,7 +274,7 @@ npm run build
 
 ### Mac: generate and open iOS
 
-On a Mac with Xcode installed, work from the feature branch and generate the native project once:
+On a Mac with Xcode and Node `>=22.12.0` installed, work from the feature branch and generate the native project once:
 
 ```bash
 git checkout feat/ios-app
@@ -289,7 +289,7 @@ npm run ios:open
 
 Commit the generated `frontend/ios/` project after `npx cap add ios`; keep the Xcode project, workspace, and lockfiles tracked. Do not add `server.url` to Capacitor: the app must package `dist/`, not display the deployed website in a wrapper.
 
-In Xcode, set version `1.0.0`, build `1`, iPhone portrait support, and an iOS 15 deployment target. Set up automatic signing with an Apple Developer account, test on a physical iPhone, upload the archive to TestFlight, and submit the tested build for manual App Store release. Use bundle ID `io.github.victorwong123.strengthos`; if it is unavailable in Apple Developer, choose a unique replacement before creating the App ID and update `frontend/capacitor.config.ts` to match.
+In Xcode, set version `1.0.0`, build `1`, target iPhone-only and portrait-only, and use an iOS 15 deployment target. Set up automatic signing with an Apple Developer account, test on a physical iPhone, upload the archive to TestFlight, and submit the tested build for manual App Store release. Use bundle ID `io.github.victorwong123.strengthos`; if it is unavailable in Apple Developer, choose a unique replacement before creating the App ID and update `frontend/capacitor.config.ts` to match.
 
 ### Production configuration
 
@@ -307,7 +307,7 @@ curl -i -X OPTIONS https://strengthos.onrender.com/account -H "Origin: capacitor
 
 ### Store release checklist
 
-- The public privacy and support pages are available at `https://strength-os-nu.vercel.app/privacy` and `https://strength-os-nu.vercel.app/support` through the existing Vercel rewrite.
-- In Xcode, add `frontend/resources/app-icon.png` to the App Icon asset and `frontend/resources/splash.png` to the launch-screen asset. The editable SVG sources are beside the PNGs.
+- The public privacy and support pages will be deployed at `https://strength-os-nu.vercel.app/privacy` and `https://strength-os-nu.vercel.app/support` through the existing Vercel rewrite.
+- In Xcode, add `frontend/resources/app-icon.png` to the App Icon asset and replace every `Splash.imageset` 1x, 2x, and 3x slot with `frontend/resources/splash.png`. The editable SVG sources are beside the PNGs.
 - Create a dedicated App Review account with safe sample workout data and provide its sign-in instructions in App Store Connect.
 - Prepare iPhone screenshots, Health & Fitness metadata, the privacy details, the encryption questionnaire, and TestFlight release notes from the actual shipped behavior.

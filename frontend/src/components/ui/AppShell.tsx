@@ -14,7 +14,7 @@ export function AppShell({ children, currentPath, onNavigate, hideNavigation = f
   return (
     <div className="min-h-screen bg-surface-page text-text-primary">
       <div className="mx-auto min-h-screen max-w-[760px]">
-        <div className={cn('px-4 pb-[calc(132px+env(safe-area-inset-bottom))] md:px-6', hideNavigation && 'pb-8')}>
+        <div className={cn('px-4 md:px-6', hideNavigation ? 'pb-[max(2rem,env(safe-area-inset-bottom))]' : 'pb-[calc(132px+env(safe-area-inset-bottom))]')}>
           {children}
         </div>
       </div>
