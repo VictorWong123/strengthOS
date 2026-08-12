@@ -272,24 +272,20 @@ npm run test:return-to
 npm run build
 ```
 
-### Mac: generate and open iOS
+### Mac: sync and open iOS
 
-On a Mac with Xcode and Node `>=22.12.0` installed, work from the feature branch and generate the native project once:
+`frontend/ios/` is tracked. On a Mac with Xcode and Node `>=22.12.0`:
 
 ```bash
-git checkout feat/ios-app
-git pull
 cd frontend
 npm ci
-npm run build
-npx cap add ios
 npm run ios:sync
 npm run ios:open
 ```
 
-Commit the generated `frontend/ios/` project after `npx cap add ios`; keep the Xcode project, workspace, and lockfiles tracked. Do not add `server.url` to Capacitor: the app must package `dist/`, not display the deployed website in a wrapper.
+The project uses bundle ID `io.github.victorwong123.strengthos`, version `1.0`, build `1`, iOS 15, iPhone-only, and portrait-only. Do not add `server.url`: app must package `dist/`, not display deployed website in a wrapper.
 
-In Xcode, set version `1.0.0`, build `1`, target iPhone-only and portrait-only, and use an iOS 15 deployment target. Set up automatic signing with an Apple Developer account, test on a physical iPhone, upload the archive to TestFlight, and submit the tested build for manual App Store release. Use bundle ID `io.github.victorwong123.strengthos`; if it is unavailable in Apple Developer, choose a unique replacement before creating the App ID and update `frontend/capacitor.config.ts` to match.
+Set up automatic signing with an Apple Developer account, test on a physical iPhone, upload archive to TestFlight, and submit tested build for manual App Store release. If bundle ID is unavailable in Apple Developer, choose a unique replacement before creating App ID and update `frontend/capacitor.config.ts` to match.
 
 ### Production configuration
 
@@ -299,7 +295,7 @@ Create an ignored `frontend/.env.production.local` with the existing production 
 VITE_API_URL=https://strengthos.onrender.com
 ```
 
-Do not put service-role keys, admin keys, or ExerciseDB credentials in this file. On Render, keep `FRONTEND_URL=https://strength-os-nu.vercel.app` and set `FRONTEND_ORIGIN=capacitor://localhost`. Verify the native CORS preflight after deployment:
+Do not put service-role keys, admin keys, or ExerciseDB credentials in this file. On Render, keep `FRONTEND_URL=https://strength-os-nu.vercel.app`; backend always allows `capacitor://localhost`. Verify native CORS preflight after deployment:
 
 ```bash
 curl -i -X OPTIONS https://strengthos.onrender.com/account -H "Origin: capacitor://localhost" -H "Access-Control-Request-Method: DELETE"
@@ -308,6 +304,6 @@ curl -i -X OPTIONS https://strengthos.onrender.com/account -H "Origin: capacitor
 ### Store release checklist
 
 - The public privacy and support pages will be deployed at `https://strength-os-nu.vercel.app/privacy` and `https://strength-os-nu.vercel.app/support` through the existing Vercel rewrite.
-- In Xcode, add `frontend/resources/app-icon.png` to the App Icon asset and replace every `Splash.imageset` 1x, 2x, and 3x slot with `frontend/resources/splash.png`. The editable SVG sources are beside the PNGs.
+- Icon and splash are installed from `frontend/resources/`; editable SVG sources remain beside PNGs.
 - Create a dedicated App Review account with safe sample workout data and provide its sign-in instructions in App Store Connect.
 - Prepare iPhone screenshots, Health & Fitness metadata, the privacy details, the encryption questionnaire, and TestFlight release notes from the actual shipped behavior.

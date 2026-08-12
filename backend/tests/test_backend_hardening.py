@@ -484,10 +484,25 @@ def test_settings_preserves_legacy_frontend_origin() -> None:
     settings = make_settings(frontend_url="https://new.example", frontend_origin="https://old.example")
 
     assert settings.allowed_frontend_origins == [
+        "capacitor://localhost",
         "http://localhost:5173",
         "https://new.example",
         "https://old.example",
     ]
+
+
+def test_capacitor_cors_preflight_is_allowed() -> None:
+    with TestClient(app_main.create_app()) as client:
+        response = client.options(
+            "/account",
+            headers={
+                "Origin": "capacitor://localhost",
+                "Access-Control-Request-Method": "DELETE",
+            },
+        )
+
+    assert response.status_code != 400
+    assert response.headers["access-control-allow-origin"] == "capacitor://localhost"
 
 
 @pytest.mark.asyncio
