@@ -1,0 +1,11 @@
+# Mocked web regression suite
+
+Requires Node 20+, an installed Playwright package, and a compatible installed browser. The suite does not download either dependency. From the frontend directory, run `npm run test:browser` or `node tests/browser/run.mjs`. The runner starts Vite with fake Supabase credentials, runs scenarios, and closes its server.
+
+Optional environment variables: `QA_FRONTEND_DIR`, `QA_PLAYWRIGHT_MODULE` (the installed Playwright module path), `QA_CHROME_EXECUTABLE` (the installed Chrome/Chromium executable), `QA_ARTIFACT_DIR`, and `QA_BASE_URL` (localhost only). `QA_SKIP_SERVER=1` uses an already running Vite server that must use the same fake configuration. `QA_SUITES` selects comma-separated suites; `QA_ONLY` filters recovery, workflow, or record scenarios. The runner owns only a server it starts, and each scenario closes its browser.
+
+The fixture uses synthetic users and a fixed September 19, 2026 browser clock in America/New_York. All Supabase/backend requests are fulfilled by the harness. Unexpected outbound requests are aborted and fail checks; service workers are blocked. No real provider requests or account writes occur.
+
+The full suite contains 72 checks covering B1–B8 and S1–S10 web flows: logging modes, targets/RPE/types, timers and preferences, history corrections/backdating/pause, progression, durable drafts/conflicts/idempotency/account isolation, weekly workload, notes, structure/grouping, calculators, Wake Lock lifecycle, PR preferences, measurements/photos, media dedup, and import-sized pagination. Dedicated regressions verify exact workout links, unknown loads, estimated 1RM selection, warm-up/active-session exclusions, assisted records, repeated exercise blocks, logging-mode isolation, zero-rep attempts, and New York week boundaries from a Tokyo browser. B9 native lock-screen/watch is deferred.
+
+Screenshots and network/error JSON remain in the artifact directory. `suite-report.json` records pass/fail results and the process returns nonzero on failures. Mocked browser checks do not establish real database RLS, Storage privacy, backend cache behavior, physical audio/vibration, or native locked-screen behavior; separate integration/device checks cover those boundaries.

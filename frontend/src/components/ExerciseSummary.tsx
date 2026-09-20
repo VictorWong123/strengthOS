@@ -49,7 +49,7 @@ function ExerciseThumbnail({ exercise, onOpenDetails }: { exercise: Exercise; on
       aria-label={`Open ${exercise.name} details`}
     >
       <ExerciseMedia
-        src={exercise.thumbnail_url}
+        src={[exercise.thumbnail_url, exercise.image_url, exercise.animation_url].filter(Boolean) as string[]}
         alt={`${exercise.name} thumbnail`}
         decoding="async"
         className="h-full w-full object-cover"

@@ -74,7 +74,7 @@ type RoutineEditorProps = {
   onCancel: () => void
   onRemoveExercise: (id: string) => void
   onMoveExercise: (id: string, direction: -1 | 1) => void
-  onExerciseFieldChange: (id: string, patch: Partial<Pick<RoutineEditorExercise, 'target_sets' | 'minReps' | 'maxReps' | 'targetRpe'>>) => void
+  onExerciseFieldChange: (id: string, patch: Partial<Pick<RoutineEditorExercise, 'target_sets' | 'minReps' | 'maxReps' | 'targetRpe' | 'rest_seconds' | 'timer_enabled'>>) => void
 }
 
 export function RoutineSectionHeader({ title, onCreate }: { title: string; onCreate: () => void }) {
@@ -290,6 +290,10 @@ export function RoutineEditor({
                   value={item.targetRpe}
                   onChange={(value) => onExerciseFieldChange(item.id, { targetRpe: value })}
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <NumberField label="Rest seconds" value={item.rest_seconds === null ? '' : String(item.rest_seconds)} onChange={(value) => onExerciseFieldChange(item.id, { rest_seconds: value ? Math.max(0, Number(value)) : null })} />
+                <label className="flex min-h-11 items-center gap-2 rounded-xl bg-surface-input px-3 text-sm"><input type="checkbox" checked={item.timer_enabled} onChange={(event) => onExerciseFieldChange(item.id, { timer_enabled: event.target.checked })} /> Rest timer</label>
               </div>
               <DeleteTextButton label="Remove exercise" onClick={() => onRemoveExercise(item.id)} />
             </SurfaceCard>

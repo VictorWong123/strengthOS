@@ -6,7 +6,7 @@ export function MaxWeightProgressChart({ sessions }: { sessions: ExerciseSession
     <TrendChart
       title="Max Weight"
       unit="lb"
-      data={sessions.map((session) => ({ label: session.label, value: session.maxWeight }))}
+      data={sessions.flatMap((session) => session.maxWeight === null ? [] : [{ label: session.label, value: session.maxWeight }])}
       tone="green"
     />
   )

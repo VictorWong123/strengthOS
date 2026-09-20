@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import Settings
 from app.repositories.supabase_training import TrainingRepository
@@ -40,10 +41,10 @@ def estimated_one_rep_max(weight: float | int | None, reps: int | None) -> float
     return round(float(weight) * (1 + reps / 30), 2)
 
 
-def working_volume(set_row: dict[str, Any]) -> float:
+def working_volume(set_row: dict[str, Any], mode: str = "weight_reps") -> float:
     """Return set volume for completed non-warmup sets."""
 
-    if not is_working_set(set_row):
+    if not is_working_set(set_row) or mode != "weight_reps":
         return 0.0
     return float(set_row.get("weight") or 0) * int(set_row.get("reps") or 0)
 
@@ -53,6 +54,10 @@ def is_working_set(set_row: dict[str, Any]) -> bool:
 
     if not set_row.get("is_completed"):
         return False
+    if set_row.get("set_type") == "warmup":
+        return False
+    if set_row.get("set_type") in {"working", "failure", "drop"}:
+        return True
     notes = str(set_row.get("notes") or "").casefold()
     return "warm" not in notes
 
@@ -149,9 +154,14 @@ class TrainingAnalyticsService:
         weeks = validate_weeks(weeks)
         days = weeks * 7
         rows = await self._training_rows(user_id, days)
+        profile = (await self.get_user_profile(user_id)).get("profile") or {}
+        try:
+            timezone = ZoneInfo(profile.get("timezone") or "America/New_York")
+        except ZoneInfoNotFoundError:
+            timezone = ZoneInfo("America/New_York")
         summary: dict[str, dict[str, Any]] = {}
         for row in rows:
-            week_start = _week_start(row["started_at"]).isoformat()
+            week_start = _week_start(row["started_at"], timezone).isoformat()
             bucket = summary.setdefault(
                 week_start,
                 {"week_start": week_start, "workout_ids": set(), "working_sets": 0, "volume": 0.0},
@@ -159,7 +169,7 @@ class TrainingAnalyticsService:
             bucket["workout_ids"].add(row["workout_id"])
             if is_working_set(row["set"]):
                 bucket["working_sets"] += 1
-                bucket["volume"] += working_volume(row["set"])
+                bucket["volume"] += working_volume(row["set"], row["logging_mode"])
         weekly = []
         for bucket in summary.values():
             weekly.append(
@@ -179,7 +189,7 @@ class TrainingAnalyticsService:
         volume: Counter[str] = Counter()
         for row in rows:
             muscle = row["exercise"].get("primary_muscle") or "unknown"
-            volume[muscle] += working_volume(row["set"])
+            volume[muscle] += working_volume(row["set"], row["logging_mode"])
         return {
             "date_range": self._date_range(days),
             "muscle_groups": [{"muscle_group": key, "volume": round(value, 2)} for key, value in volume.items()],
@@ -194,18 +204,25 @@ class TrainingAnalyticsService:
             set_row = row["set"]
             if not is_working_set(set_row):
                 continue
-            estimate = estimated_one_rep_max(set_row.get("weight"), set_row.get("reps"))
-            if estimate is None:
+            mode = row["logging_mode"]
+            estimate = estimated_one_rep_max(set_row.get("weight"), set_row.get("reps")) if mode == "weight_reps" else None
+            metric = _record_metric(set_row, mode)
+            if metric is None:
                 continue
             exercise = row["exercise"]
             current = records.get(exercise["id"])
-            if current is None or estimate > current["estimated_1rm"]:
+            if current is None or metric > current["metric"]:
                 records[exercise["id"]] = {
                     "exercise": _exercise_summary(exercise),
+                    "logging_mode": mode,
                     "date": row["started_at"].date().isoformat(),
+                    "workout_id": row["workout_id"],
                     "weight": set_row.get("weight"),
                     "reps": set_row.get("reps"),
+                    "duration_seconds": set_row.get("duration_seconds"),
+                    "assistance_weight": set_row.get("assistance_weight"),
                     "estimated_1rm": estimate,
+                    "metric": metric,
                 }
         return {"date_range": self._date_range(days), "records": list(records.values())}
 
@@ -216,27 +233,32 @@ class TrainingAnalyticsService:
         by_exercise: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             estimate = estimated_one_rep_max(row["set"].get("weight"), row["set"].get("reps"))
-            if is_working_set(row["set"]) and estimate is not None:
+            if row["logging_mode"] == "weight_reps" and is_working_set(row["set"]) and estimate is not None:
                 by_exercise[row["exercise"]["id"]].append({**row, "estimated_1rm": estimate})
 
         stagnating = []
         for rows_for_exercise in by_exercise.values():
-            exposure_dates = sorted({row["started_at"].date() for row in rows_for_exercise})
-            if len(exposure_dates) < MIN_STAGNATION_EXPOSURES:
+            session_best: dict[str, dict[str, Any]] = {}
+            for row in rows_for_exercise:
+                current = session_best.get(row["workout_id"])
+                if current is None or row["estimated_1rm"] > current["estimated_1rm"]:
+                    session_best[row["workout_id"]] = row
+            exposures = sorted(session_best.values(), key=lambda row: row["started_at"])
+            if len(exposures) < MIN_STAGNATION_EXPOSURES:
                 continue
-            first = min(rows_for_exercise, key=lambda row: row["started_at"])["estimated_1rm"]
-            latest = max(rows_for_exercise, key=lambda row: row["started_at"])["estimated_1rm"]
+            first = exposures[0]["estimated_1rm"]
+            latest = exposures[-1]["estimated_1rm"]
             change = _percent_change(first, latest)
             if change is not None and change <= 2:
                 exercise = rows_for_exercise[0]["exercise"]
                 stagnating.append(
                     {
                         "exercise": _exercise_summary(exercise),
-                        "exposures": len(exposure_dates),
+                        "exposures": len(exposures),
                         "estimated_1rm_change_percent": change,
                         "evidence": [
                             {"date": row["started_at"].date().isoformat(), "estimated_1rm": row["estimated_1rm"]}
-                            for row in rows_for_exercise[-MIN_STAGNATION_EXPOSURES:]
+                            for row in exposures[-MIN_STAGNATION_EXPOSURES:]
                         ],
                     }
                 )
@@ -246,26 +268,34 @@ class TrainingAnalyticsService:
         """Find muscle groups with low recent working-set exposure."""
 
         rows = await self._training_rows(user_id, validate_days(days))
+        async with TrainingRepository(self._settings) as repository:
+            visible = await repository.get_visible_exercises(user_id)
+        known_muscles = {str(exercise["primary_muscle"]) for exercise in visible if exercise.get("primary_muscle")}
         counts: Counter[str] = Counter()
         last_trained: dict[str, datetime] = {}
+        unknown_sets = 0
         for row in rows:
             if not is_working_set(row["set"]):
                 continue
-            muscle = row["exercise"].get("primary_muscle") or "unknown"
+            muscle = row["exercise"].get("primary_muscle")
+            if not muscle:
+                unknown_sets += 1
+                continue
             counts[muscle] += 1
             last_trained[muscle] = max(last_trained.get(muscle, row["started_at"]), row["started_at"])
         findings = []
         today = datetime.now(UTC)
-        for muscle, set_count in counts.items():
+        for muscle in sorted(known_muscles):
+            set_count = counts[muscle]
             if set_count < DEFAULT_UNDERTRAINED_SET_THRESHOLD:
                 findings.append(
                     {
                         "muscle_group": muscle,
                         "working_sets": set_count,
-                        "days_since_last_trained": (today.date() - last_trained[muscle].date()).days,
+                        "days_since_last_trained": (today.date() - last_trained[muscle].date()).days if muscle in last_trained else None,
                     }
                 )
-        return {"date_range": self._date_range(days), "undertrained_muscle_groups": findings}
+        return {"date_range": self._date_range(days), "undertrained_muscle_groups": findings, "unknown_primary_muscle_sets": unknown_sets}
 
     async def get_current_routines(self, user_id: str) -> dict[str, Any]:
         """Return current routines with routine exercises attached."""
@@ -329,7 +359,7 @@ class TrainingAnalyticsService:
             sets = await repository.get_sets_by_workout_exercises([row["id"] for row in matching])
 
         exercise_row_by_id = {row["id"]: row for row in matching}
-        by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        by_workout: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for set_row in sets:
             workout_exercise = exercise_row_by_id.get(set_row["workout_exercise_id"])
             if not workout_exercise:
@@ -338,19 +368,27 @@ class TrainingAnalyticsService:
             started_at = parse_timestamp(workout.get("started_at") if workout else None)
             if not started_at:
                 continue
-            by_date[started_at.date().isoformat()].append(set_row)
+            by_workout[workout_exercise["workout_id"]].append(set_row)
 
         performances = []
-        for performed_on, set_rows in sorted(by_date.items()):
-            best = _best_set(set_rows)
+        for workout_id, set_rows in by_workout.items():
+            workout = workout_by_id[workout_id]
+            if not workout.get("completed_at"):
+                continue
+            performed_at = parse_timestamp(workout.get("started_at"))
+            occurrence = next((row for row in matching if row["workout_id"] == workout_id), {})
+            mode = occurrence.get("logging_mode") or exercise.get("logging_mode") or "weight_reps"
+            best = _best_set(set_rows, mode)
             performances.append(
                 {
-                    "date": performed_on,
+                    "workout_id": workout_id,
+                    "date": performed_at.date().isoformat() if performed_at else None,
                     "best_set": best,
-                    "working_volume": round(sum(working_volume(set_row) for set_row in set_rows), 2),
+                    "logging_mode": mode,
+                    "working_volume": round(sum(working_volume(set_row, mode) for set_row in set_rows), 2),
                 }
             )
-        return _exercise_summary(exercise), performances, []
+        return _exercise_summary(exercise), sorted(performances, key=lambda row: row["date"] or ""), []
 
     async def _training_rows(self, user_id: str, days: int) -> list[dict[str, Any]]:
         async with TrainingRepository(self._settings) as repository:
@@ -374,12 +412,13 @@ class TrainingAnalyticsService:
             workout = workout_by_id.get(workout_exercise["workout_id"])
             exercise = exercises.get(workout_exercise["exercise_id"])
             started_at = parse_timestamp(workout.get("started_at") if workout else None)
-            if workout and exercise and started_at:
+            if workout and workout.get("completed_at") and exercise and started_at:
                 rows.append(
                     {
                         "workout_id": workout["id"],
                         "started_at": started_at,
                         "exercise": exercise,
+                        "logging_mode": workout_exercise.get("logging_mode") or exercise.get("logging_mode") or "weight_reps",
                         "set": set_row,
                     }
                 )
@@ -425,6 +464,8 @@ def _exercise_summary(exercise: dict[str, Any]) -> dict[str, Any]:
         "name": exercise.get("name"),
         "equipment": exercise.get("equipment"),
         "primary_muscle": exercise.get("primary_muscle"),
+        "secondary_muscles": exercise.get("secondary_muscles") or [],
+        "logging_mode": exercise.get("logging_mode") or "weight_reps",
     }
 
 
@@ -441,26 +482,55 @@ def _profile_summary(profile: dict[str, Any] | None) -> dict[str, Any] | None:
         "training_goal": profile.get("training_goal"),
         "training_experience": profile.get("training_experience"),
         "limitations": profile.get("limitations"),
+        "timezone": profile.get("timezone") or "America/New_York",
     }
 
 
-def _best_set(sets: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _best_set(sets: list[dict[str, Any]], mode: str = "weight_reps") -> dict[str, Any] | None:
     candidates = []
     for set_row in sets:
         if not is_working_set(set_row):
             continue
-        estimate = estimated_one_rep_max(set_row.get("weight"), set_row.get("reps"))
-        if estimate is not None:
-            candidates.append((estimate, set_row))
+        if mode == "duration":
+            score = float(set_row.get("duration_seconds") or 0)
+        elif mode == "assisted_bodyweight":
+            score = float(set_row.get("reps") or 0) * 10000 - float(set_row.get("assistance_weight") or 0)
+        elif mode in {"bodyweight_reps", "weighted_bodyweight"}:
+            score = float(set_row.get("reps") or 0) * 10000 + float(set_row.get("weight") or 0)
+        else:
+            score = estimated_one_rep_max(set_row.get("weight"), set_row.get("reps")) or 0
+        if score > 0:
+            candidates.append((score, set_row))
     if not candidates:
         return None
-    estimate, set_row = max(candidates, key=lambda item: item[0])
+    _score, set_row = max(candidates, key=lambda item: item[0])
     return {
         "weight": set_row.get("weight"),
         "reps": set_row.get("reps"),
-        "rpe": None,
-        "estimated_1rm": estimate,
+        "duration_seconds": set_row.get("duration_seconds"),
+        "assistance_weight": set_row.get("assistance_weight"),
+        "rpe": set_row.get("rpe"),
+        "estimated_1rm": estimated_one_rep_max(set_row.get("weight"), set_row.get("reps")) if mode == "weight_reps" else None,
     }
+
+
+def _record_metric(set_row: dict[str, Any], mode: str) -> float | None:
+    """Return a comparable mode-specific score for one completed working set."""
+
+    if mode == "duration":
+        value = float(set_row.get("duration_seconds") or 0)
+    elif mode == "bodyweight_reps":
+        value = float(set_row.get("reps") or 0)
+    elif mode == "assisted_bodyweight":
+        reps = float(set_row.get("reps") or 0)
+        assistance = set_row.get("assistance_weight")
+        value = reps * 1_000_000 - float(assistance) if reps and assistance is not None else 0
+    elif mode == "weighted_bodyweight":
+        value = float(set_row.get("weight") or 0) * 1_000 + float(set_row.get("reps") or 0)
+    else:
+        estimate = estimated_one_rep_max(set_row.get("weight"), set_row.get("reps"))
+        return estimate
+    return value if value > 0 else None
 
 
 def _percent_change(start: float | int | None, end: float | int | None) -> float | None:
@@ -469,5 +539,6 @@ def _percent_change(start: float | int | None, end: float | int | None) -> float
     return round(((float(end) - float(start)) / float(start)) * 100, 2)
 
 
-def _week_start(value: datetime) -> date:
-    return value.date() - timedelta(days=value.weekday())
+def _week_start(value: datetime, timezone: ZoneInfo = ZoneInfo("UTC")) -> date:
+    local = value.astimezone(timezone)
+    return local.date() - timedelta(days=(local.weekday() + 1) % 7)

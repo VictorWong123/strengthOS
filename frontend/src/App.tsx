@@ -12,6 +12,7 @@ import { ProfilePage } from './components/ProfilePage'
 import { RoutineEditorPage } from './components/RoutineEditorPage'
 import { RoutineActionList } from './components/RoutineUI'
 import { WorkoutPage } from './components/WorkoutPage'
+import { WorkoutHistoryPage } from './components/WorkoutHistoryPage'
 import {
   AppShell,
   BottomSheet,
@@ -21,18 +22,20 @@ import {
   SecondaryButton,
 } from './components/ui'
 import { assignReturnToAfterAuth, logAuthEvent } from './lib/authRedirect'
+import { dateKeyInTimeZone, DEFAULT_TIME_ZONE, normalizeTimeZone, sundayDateKey } from './lib/dateTime'
+import { loadExerciseCatalog } from './lib/exerciseCatalog'
+import { getSetMutation, listSetMutations, listWorkoutMutations, markWorkoutMutationsConflict, queueSetMutation, queueWorkoutMutation, rebasePendingWorkoutMutations, removeSetMutation, type SetMutation, type WorkoutMutation } from './lib/offlineOutbox'
 import { estimatedOneRepMax } from './lib/performance'
 import { supabase } from './lib/supabase'
 import { formatRoutineTarget, parseRoutineTarget } from './lib/training'
-import type { Exercise, Routine, RoutineExercise, Workout, WorkoutExercise, WorkoutSet } from './lib/types'
+import { exerciseModeKey, isWorkingSet, loadedVolume, warmupSets } from './lib/trainingMetrics'
+import type { Exercise, ExerciseSessionEvidence, Routine, RoutineExercise, Workout, WorkoutExercise, WorkoutSet } from './lib/types'
 
-const EXERCISE_COLUMNS =
-  'id, external_id, source, user_id, name, normalized_name, primary_muscle, secondary_muscles, body_part, equipment, movement_category, instructions, image_url, animation_url, thumbnail_url, is_custom, is_active'
-const WORKOUT_COLUMNS = 'id, user_id, name, started_at, completed_at, notes'
-const WORKOUT_EXERCISE_COLUMNS = 'id, workout_id, exercise_id, exercise_order'
-const WORKOUT_SET_COLUMNS = 'id, workout_exercise_id, set_order, reps, weight, is_completed, notes, completed_at'
+const WORKOUT_COLUMNS = 'id, user_id, name, started_at, completed_at, notes, revision, duration_seconds, paused_at, accumulated_pause_seconds, source, external_id, import_hash'
+const WORKOUT_EXERCISE_COLUMNS = 'id, workout_id, exercise_id, exercise_order, notes, logging_mode, target_sets, target_reps, target_rpe, rest_seconds, timer_enabled, session_notes, superset_group, source_name'
+const WORKOUT_SET_COLUMNS = 'id, workout_exercise_id, set_order, reps, weight, is_completed, notes, completed_at, set_type, duration_seconds, assistance_weight, bodyweight, rpe, operation_id'
 const ROUTINE_COLUMNS = 'id, user_id, name, notes, created_at, updated_at'
-const ROUTINE_EXERCISE_COLUMNS = 'id, routine_id, exercise_id, exercise_order, target_sets, target_reps, notes, created_at'
+const ROUTINE_EXERCISE_COLUMNS = 'id, routine_id, exercise_id, exercise_order, target_sets, target_reps, target_rpe, rest_seconds, timer_enabled, superset_group, notes, created_at'
 const REORDER_HINT_KEY = 'strengthos:routine-reorder-hint:dismissed'
 
 type Route =
@@ -40,6 +43,7 @@ type Route =
   | { name: 'workout'; pathname: '/workout' }
   | { name: 'active-workout'; pathname: '/workout/active' }
   | { name: 'analytics'; pathname: '/analytics' }
+  | { name: 'history'; pathname: string; date?: string; workoutId?: string }
   | { name: 'exercises'; pathname: '/exercises' }
   | { name: 'profile'; pathname: '/profile' }
   | { name: 'login'; pathname: '/login' }
@@ -84,6 +88,7 @@ export function App() {
   const [showReorderHint, setShowReorderHint] = useState(() => localStorage.getItem(REORDER_HINT_KEY) !== '1')
   const [routineGroupExpanded, setRoutineGroupExpanded] = useState(true)
   const [pickerMode, setPickerMode] = useState<PickerMode | null>(null)
+  const [replacementWorkoutExerciseId, setReplacementWorkoutExerciseId] = useState<string | null>(null)
   const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null)
   const [selectedExerciseSource, setSelectedExerciseSource] = useState<ExerciseDetailSource>('library')
   const [selectedExerciseSets, setSelectedExerciseSets] = useState<WorkoutSet[]>([])
@@ -102,6 +107,12 @@ export function App() {
   const [routineExercises, setRoutineExercises] = useState<RoutineExercise[]>([])
   const [routineOrder, setRoutineOrder] = useState<string[]>([])
   const exerciseHistoryRequestRef = useRef(0)
+  const workoutsRef = useRef<Workout[]>([])
+  const mutationQueueRef = useRef(Promise.resolve())
+  const [setSyncState, setSetSyncState] = useState<Map<string, 'pending' | 'failed'>>(() => new Map())
+  const [prAlertsEnabled, setPrAlertsEnabled] = useState(() => localStorage.getItem('strengthos:pr-alerts') !== '0')
+  const [accountTimeZone, setAccountTimeZone] = useState(DEFAULT_TIME_ZONE)
+  const [conflictedMutations, setConflictedMutations] = useState<SetMutation[]>([])
 
   const route = useMemo(() => parseRoute(pathname), [pathname])
   const exerciseById = useMemo(() => new Map(exercises.map((exercise) => [exercise.id, exercise])), [exercises])
@@ -149,21 +160,48 @@ export function App() {
 
     return map
   }, [setsByWorkoutExerciseId, workoutById, workoutExercises])
+  const previousSessionsByExerciseMode = useMemo(() => {
+    const map = new Map<string, ExerciseSessionEvidence[]>()
+    const items = [...workoutExercises].sort((a, b) => {
+      const left = workoutById.get(a.workout_id)
+      const right = workoutById.get(b.workout_id)
+      return new Date(right?.completed_at ?? 0).getTime() - new Date(left?.completed_at ?? 0).getTime()
+    })
+    for (const [key, modeItems] of groupBy(items, (item) => exerciseModeKey(item.exercise_id, item.logging_mode))) {
+      const sessions = [...groupBy(modeItems, (item) => item.workout_id)].flatMap(([workoutId, sessionItems]) => {
+        const workout = workoutById.get(workoutId)
+        const sessionSets = sessionItems.flatMap((item) => setsByWorkoutExerciseId.get(item.id) ?? [])
+        return workout?.completed_at && sessionSets.length
+          ? [{ workoutId, date: workout.completed_at, sets: sessionSets }]
+          : []
+      })
+      if (sessions.length) map.set(key, sessions)
+    }
+    return map
+  }, [setsByWorkoutExerciseId, workoutById, workoutExercises])
+  const previousSessionNoteByExerciseId = useMemo(() => {
+    const notes = new Map<string, string>()
+    for (const item of [...workoutExercises].sort((a, b) => workoutDateMs(workoutById.get(b.workout_id)!) - workoutDateMs(workoutById.get(a.workout_id)!))) {
+      if (workoutById.get(item.workout_id)?.completed_at && item.session_notes && !notes.has(item.exercise_id)) notes.set(item.exercise_id, item.session_notes)
+    }
+    return notes
+  }, [workoutById, workoutExercises])
 
-  const historicalRecordsByExerciseId = useMemo(() => {
+  const historicalRecordsByExerciseMode = useMemo(() => {
     const map = new Map<string, { maxWeight: number; volume: number }>()
 
     for (const item of workoutExercises) {
       const workout = workoutById.get(item.workout_id)
       if (!workout?.completed_at) continue
 
-      const completedSets = (setsByWorkoutExerciseId.get(item.id) ?? []).filter((set) => set.is_completed && set.weight && set.reps)
+      const completedSets = (setsByWorkoutExerciseId.get(item.id) ?? []).filter(isWorkingSet)
       if (!completedSets.length) continue
 
-      const current = map.get(item.exercise_id) ?? { maxWeight: 0, volume: 0 }
-      const maxWeight = Math.max(...completedSets.map((set) => set.weight ?? 0))
-      const volume = completedSets.reduce((total, set) => total + (set.weight ?? 0) * (set.reps ?? 0), 0)
-      map.set(item.exercise_id, {
+      const key = exerciseModeKey(item.exercise_id, item.logging_mode)
+      const current = map.get(key) ?? { maxWeight: 0, volume: 0 }
+      const maxWeight = ['weight_reps', 'weighted_bodyweight'].includes(item.logging_mode) ? Math.max(...completedSets.map((set) => set.weight ?? 0)) : 0
+      const volume = completedSets.reduce((total, set) => total + loadedVolume(set, item.logging_mode), 0)
+      map.set(key, {
         maxWeight: Math.max(current.maxWeight, maxWeight),
         volume: Math.max(current.volume, volume),
       })
@@ -179,12 +217,16 @@ export function App() {
         .sort((left, right) => workoutDateMs(right) - workoutDateMs(left)),
     [workouts],
   )
+
+  useEffect(() => {
+    workoutsRef.current = workouts
+  }, [workouts])
   const weeklyCompletedWorkouts = useMemo(
     () => {
-      const weekStart = startOfCurrentSunday().getTime()
-      return completedWorkouts.filter((workout) => workoutDateMs(workout) >= weekStart)
+      const weekStart = sundayDateKey(accountTimeZone)
+      return completedWorkouts.filter((workout) => dateKeyInTimeZone(workout.completed_at ?? workout.started_at, accountTimeZone) >= weekStart)
     },
-    [completedWorkouts],
+    [accountTimeZone, completedWorkouts],
   )
   const weeklySummary = useMemo(() => {
     const weeklyWorkoutIds = new Set(weeklyCompletedWorkouts.map((workout) => workout.id))
@@ -200,11 +242,11 @@ export function App() {
 
     for (const set of sets) {
       const workoutExercise = weeklyWorkoutExerciseById.get(set.workout_exercise_id)
-      if (!workoutExercise || !set.is_completed || !set.weight || !set.reps) continue
+      if (!workoutExercise || !isWorkingSet(set)) continue
       completedWorkoutExerciseIds.add(workoutExercise.id)
-      poundsLifted += set.weight * set.reps
+      poundsLifted += loadedVolume(set, workoutExercise.logging_mode)
 
-      if (!bestSet || (estimatedOneRepMax(set) ?? 0) > (estimatedOneRepMax(bestSet) ?? 0)) {
+      if (workoutExercise.logging_mode === 'weight_reps' && (!bestSet || (estimatedOneRepMax(set) ?? 0) > (estimatedOneRepMax(bestSet) ?? 0))) {
         bestSet = set
         bestExerciseName = workoutExercise ? exerciseById.get(workoutExercise.exercise_id)?.name ?? '' : ''
       }
@@ -271,6 +313,17 @@ export function App() {
   }, [session])
 
   useEffect(() => {
+    if (!session || !isOnline || isInitialLoading) return
+    void listSetMutations(session.user.id).then((operations) => {
+      for (const operation of operations) enqueueSetMutation(operation)
+    })
+    void listWorkoutMutations(session.user.id).then((operations) => {
+      for (const operation of operations) enqueueWorkoutMutation(operation)
+    })
+    void refreshConflicts(session.user.id)
+  }, [isInitialLoading, isOnline, session])
+
+  useEffect(() => {
     if (!selectedExercise) {
       exerciseHistoryRequestRef.current += 1
       setSelectedExerciseSets([])
@@ -286,9 +339,9 @@ export function App() {
     }
 
     const sourceKey = route.name === 'routine-new' ? 'new' : route.routineId
-    if (routineDraft?.sourceKey === sourceKey) return
 
     if (route.name === 'routine-new') {
+      if (routineDraft?.sourceKey === sourceKey) return
       setRoutineDraft(buildRoutineDraft({ sourceKey, exercises: pendingRoutineExercises, exerciseById }))
       setPendingRoutineExercises([])
       return
@@ -297,6 +350,7 @@ export function App() {
     const routine = routineById.get(route.routineId)
     const items = routineExercisesByRoutineId.get(route.routineId) ?? []
     if (!routine) return
+    if (routineDraft?.sourceKey === sourceKey && (routineDraft.exercises.length > 0 || items.length === 0)) return
 
     setRoutineDraft(
       buildRoutineDraft({
@@ -317,10 +371,12 @@ export function App() {
       { data: exerciseRows, error: exerciseError },
       { data: workoutRows, error: workoutError },
       { data: routineRows, error: routineError },
+      { data: profileRow },
     ] = await Promise.all([
-      supabase.from('exercises').select(EXERCISE_COLUMNS).eq('is_active', true).order('name'),
+      loadExerciseCatalog(supabase),
       supabase.from('workouts').select(WORKOUT_COLUMNS).order('started_at', { ascending: false }),
       supabase.from('routines').select(ROUTINE_COLUMNS).order('created_at', { ascending: false }),
+      supabase.from('profiles').select('timezone').eq('id', session.user.id).maybeSingle(),
     ])
 
     const loadFailure = exerciseError ?? workoutError ?? routineError
@@ -331,7 +387,10 @@ export function App() {
     }
 
     const loadedExercises = (exerciseRows ?? []) as Exercise[]
-    const loadedWorkouts = (workoutRows ?? []) as Workout[]
+    setAccountTimeZone(normalizeTimeZone((profileRow as { timezone?: string | null } | null)?.timezone))
+    let loadedWorkouts = (workoutRows ?? []) as Workout[]
+    const workoutDrafts = await listWorkoutMutations(session.user.id)
+    loadedWorkouts = loadedWorkouts.map((workout) => workoutDrafts.filter((draft) => draft.workoutId === workout.id).reduce((current, draft) => ({ ...current, ...draft.patch }), workout) as Workout)
     const loadedRoutines = (routineRows ?? []) as Routine[]
 
     setExercises(loadedExercises)
@@ -358,11 +417,7 @@ export function App() {
       return true
     }
 
-    const { data: exerciseRows, error: workoutExerciseError } = await supabase
-      .from('workout_exercises')
-      .select(WORKOUT_EXERCISE_COLUMNS)
-      .in('workout_id', workoutIds)
-      .order('exercise_order')
+    const { data: exerciseRows, error: workoutExerciseError } = await loadSupabaseChildren('workout_exercises', WORKOUT_EXERCISE_COLUMNS, 'workout_id', workoutIds, 'exercise_order')
 
     if (workoutExerciseError) {
       setLoadError(workoutExerciseError.message)
@@ -378,18 +433,25 @@ export function App() {
       return true
     }
 
-    const { data: setRows, error: setError } = await supabase
-      .from('workout_sets')
-      .select(WORKOUT_SET_COLUMNS)
-      .in('workout_exercise_id', workoutExerciseIds)
-      .order('set_order')
+    const { data: setRows, error: setError } = await loadSupabaseChildren('workout_sets', WORKOUT_SET_COLUMNS, 'workout_exercise_id', workoutExerciseIds, 'set_order')
 
     if (setError) {
       setLoadError(setError.message)
       return false
     }
 
-    setSets((setRows ?? []) as WorkoutSet[])
+    let loadedSets = (setRows ?? []) as WorkoutSet[]
+    if (session) {
+      const pending = await listSetMutations(session.user.id)
+      const byId = new Map(loadedSets.map((set) => [set.id, set]))
+      for (const operation of pending) {
+        const current = byId.get(operation.setId)
+        if (current) byId.set(operation.setId, { ...current, ...operation.patch })
+        markSetSync(operation.setId, 'pending')
+      }
+      loadedSets = [...byId.values()]
+    }
+    setSets(loadedSets)
     return true
   }
 
@@ -417,10 +479,14 @@ export function App() {
 
   async function loadExerciseHistory(exerciseId: string) {
     const requestId = ++exerciseHistoryRequestRef.current
-    const { data: exerciseRows, error: exerciseError } = await supabase
-      .from('workout_exercises')
-      .select(WORKOUT_EXERCISE_COLUMNS)
-      .eq('exercise_id', exerciseId)
+    const exerciseRows: Record<string, unknown>[] = []
+    let exerciseError = null
+    for (let from = 0; ; from += 1000) {
+      const result = await supabase.from('workout_exercises').select(WORKOUT_EXERCISE_COLUMNS).eq('exercise_id', exerciseId).range(from, from + 999)
+      if (result.error) { exerciseError = result.error; break }
+      exerciseRows.push(...((result.data ?? []) as unknown as Record<string, unknown>[]))
+      if ((result.data?.length ?? 0) < 1000) break
+    }
 
     if (requestId !== exerciseHistoryRequestRef.current) return
 
@@ -429,18 +495,14 @@ export function App() {
       return
     }
 
-    const workoutExerciseIds = ((exerciseRows ?? []) as WorkoutExercise[]).map((item) => item.id)
+    const workoutExerciseIds = (exerciseRows as WorkoutExercise[]).map((item) => item.id)
     if (!workoutExerciseIds.length) {
       if (requestId !== exerciseHistoryRequestRef.current) return
       setSelectedExerciseSets([])
       return
     }
 
-    const { data: setRows, error: setError } = await supabase
-      .from('workout_sets')
-      .select(WORKOUT_SET_COLUMNS)
-      .in('workout_exercise_id', workoutExerciseIds)
-      .order('completed_at', { ascending: false })
+    const { data: setRows, error: setError } = await loadSupabaseChildren('workout_sets', WORKOUT_SET_COLUMNS, 'workout_exercise_id', workoutExerciseIds, 'completed_at')
 
     if (requestId !== exerciseHistoryRequestRef.current) return
 
@@ -463,12 +525,12 @@ export function App() {
     navigate(nextPath === '/workout' && activeWorkout ? '/workout/active' : nextPath)
   }, [activeWorkout, navigate])
 
-  async function createWorkout(name = 'Workout'): Promise<Workout | null> {
+  async function createWorkout(name = 'Workout', startedAt?: string, backdated = false): Promise<Workout | null> {
     if (!session) return null
 
     const { data, error } = await supabase
       .from('workouts')
-      .insert({ user_id: session.user.id, name })
+      .insert({ user_id: session.user.id, name, ...(startedAt ? { started_at: startedAt } : {}), ...(backdated && startedAt ? { paused_at: startedAt, duration_seconds: 3600 } : {}) })
       .select(WORKOUT_COLUMNS)
       .single()
 
@@ -479,6 +541,7 @@ export function App() {
 
     const workout = data as Workout
     setWorkouts((current) => [workout, ...current])
+    workoutsRef.current = [workout, ...workoutsRef.current]
     return workout
   }
 
@@ -492,22 +555,9 @@ export function App() {
     const workout = activeWorkout ?? (await createWorkout('Workout'))
     if (!workout) return false
 
-    const { data, error } = await supabase
-      .from('workout_exercises')
-      .insert({
-        workout_id: workout.id,
-        exercise_id: exercise.id,
-        exercise_order: workoutExercisesByWorkoutId.get(workout.id)?.length ?? 0,
-      })
-      .select(WORKOUT_EXERCISE_COLUMNS)
-      .single()
-
-    if (error) {
-      setStatus({ tone: 'danger', message: error.message })
-      return false
-    }
-
-    const workoutExercise = data as WorkoutExercise
+    const result = await mutateWorkoutExercise(workout.id, 'add', { newId: crypto.randomUUID(), exercise, order: workoutExercisesByWorkoutId.get(workout.id)?.length ?? 0 })
+    if (!result?.workout_exercise) return false
+    const workoutExercise = result.workout_exercise
     setWorkoutExercises((current) => [...current, workoutExercise])
     await addSet(workoutExercise.id, exercise.id)
     setStatus({ tone: 'success', message: `${exercise.name} added to workout.` })
@@ -537,6 +587,15 @@ export function App() {
       workout_id: workout.id,
       exercise_id: item.exercise_id,
       exercise_order: baseOrder + index,
+      logging_mode: exerciseById.get(item.exercise_id)?.logging_mode ?? 'weight_reps',
+      target_sets: item.target_sets,
+      target_reps: item.target_reps,
+      target_rpe: item.target_rpe ?? numberOrNull(parseRoutineTarget(item.target_reps).rpe),
+      rest_seconds: item.rest_seconds,
+      timer_enabled: item.timer_enabled,
+      superset_group: item.superset_group,
+      notes: item.notes,
+      source_name: exerciseById.get(item.exercise_id)?.name ?? null,
     }))
 
     const { data, error } = await supabase.from('workout_exercises').insert(insertPayload).select(WORKOUT_EXERCISE_COLUMNS)
@@ -570,6 +629,84 @@ export function App() {
     navigate('/workout/active')
   }
 
+  async function repeatWorkout(sourceWorkout: Workout): Promise<boolean> {
+    if (activeWorkout) {
+      setStatus({ tone: 'warning', message: 'Finish or discard the active workout before repeating another session.' })
+      navigate('/workout/active')
+      return false
+    }
+
+    const sourceExercises = workoutExercisesByWorkoutId.get(sourceWorkout.id) ?? []
+    if (!sourceExercises.length) {
+      setStatus({ tone: 'warning', message: 'This workout has no exercises to repeat.' })
+      return false
+    }
+
+    const workout = await createWorkout(sourceWorkout.name || 'Workout')
+    if (!workout) return false
+
+    const exercisePayload = sourceExercises.map((item) => ({
+      workout_id: workout.id,
+      exercise_id: item.exercise_id,
+      exercise_order: item.exercise_order,
+      logging_mode: item.logging_mode,
+      target_sets: item.target_sets,
+      target_reps: item.target_reps,
+      target_rpe: item.target_rpe,
+      rest_seconds: item.rest_seconds,
+      timer_enabled: item.timer_enabled,
+      notes: item.notes,
+      superset_group: item.superset_group,
+      source_name: item.source_name,
+    }))
+    const { data: exerciseRows, error: exerciseError } = await supabase
+      .from('workout_exercises')
+      .insert(exercisePayload)
+      .select(WORKOUT_EXERCISE_COLUMNS)
+
+    if (exerciseError) {
+      setStatus({ tone: 'danger', message: exerciseError.message })
+      return false
+    }
+
+    const insertedExercises = ((exerciseRows ?? []) as WorkoutExercise[]).sort((left, right) => left.exercise_order - right.exercise_order)
+    setWorkoutExercises((current) => [...current, ...insertedExercises])
+
+    const setPayload = insertedExercises.flatMap((insertedExercise, index) => {
+      const sourceExercise = sourceExercises[index]
+      return (sourceExercise ? setsByWorkoutExerciseId.get(sourceExercise.id) ?? [] : [])
+        .sort((left, right) => left.set_order - right.set_order)
+        .map((set) => ({
+          workout_exercise_id: insertedExercise.id,
+          set_order: set.set_order,
+          reps: set.reps,
+          weight: set.weight,
+          duration_seconds: set.duration_seconds,
+          assistance_weight: set.assistance_weight,
+          bodyweight: set.bodyweight,
+          rpe: null,
+          set_type: set.set_type,
+          operation_id: crypto.randomUUID(),
+          is_completed: false,
+          notes: set.notes,
+          completed_at: null,
+        }))
+    })
+
+    if (setPayload.length) {
+      const { data: setRows, error: setError } = await supabase.from('workout_sets').insert(setPayload).select(WORKOUT_SET_COLUMNS)
+      if (setError) {
+        setStatus({ tone: 'danger', message: setError.message })
+        return false
+      }
+      setSets((current) => [...current, ...((setRows ?? []) as WorkoutSet[])])
+    }
+
+    setStatus({ tone: 'success', message: `${sourceWorkout.name || 'Workout'} ready to repeat.` })
+    navigate('/workout/active')
+    return true
+  }
+
   async function addSet(workoutExerciseId: string, exerciseId?: string) {
     const currentSets = setsByWorkoutExerciseId.get(workoutExerciseId) ?? []
     const setOrder = currentSets.length
@@ -578,22 +715,63 @@ export function App() {
     const historicalDefault = resolvedExerciseId ? previousSetsByExerciseId.get(resolvedExerciseId)?.[setOrder] ?? null : null
     const currentWorkoutDefault = currentSets[setOrder - 1] ?? null
     const defaultSet = historicalDefault ?? currentWorkoutDefault
-    const { data, error } = await supabase
-      .from('workout_sets')
-      .insert(buildSetInsertPayload(workoutExerciseId, setOrder, defaultSet))
-      .select(WORKOUT_SET_COLUMNS)
-      .single()
-
-    if (error) {
-      setStatus({ tone: 'danger', message: error.message })
-      return
-    }
-
-    const newSet = data as WorkoutSet
+    const newSet = await addSetValues(workoutExerciseId, buildSetInsertPayload(workoutExerciseId, setOrder, defaultSet))
+    if (!newSet) return
     setSets((current) => [...current, newSet])
     if (exerciseId && exerciseId === selectedExercise?.id) {
       setSelectedExerciseSets((current) => [...current, newSet])
     }
+  }
+
+  async function addWarmups(workoutExerciseId: string, targetWeight: number, barWeight: number, plates: number[]) {
+    const currentSets = setsByWorkoutExerciseId.get(workoutExerciseId) ?? []
+    const payload = warmupSets(targetWeight, plates, barWeight).map((warmup, index) => ({
+      ...buildSetInsertPayload(workoutExerciseId, currentSets.length + index, null),
+      weight: warmup.weight,
+      reps: warmup.reps,
+      set_type: 'warmup',
+    }))
+    if (!payload.length) return
+    const inserted: WorkoutSet[] = []
+    for (const values of payload) {
+      const saved = await addSetValues(workoutExerciseId, values)
+      if (!saved) break
+      inserted.push(saved)
+    }
+    if (inserted.length) setSets((current) => [...current, ...inserted])
+  }
+
+  async function addSetValues(workoutExerciseId: string, values: ReturnType<typeof buildSetInsertPayload>) {
+    const item = workoutExercises.find((candidate) => candidate.id === workoutExerciseId)
+    if (!item) return null
+    const operationId = crypto.randomUUID()
+    const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      const workout = workoutsRef.current.find((candidate) => candidate.id === item.workout_id)
+      if (!workout) throw new Error('Workout not found.')
+      const { data, error } = await supabase.rpc('add_workout_set', {
+        p_workout_id: workout.id,
+        p_workout_exercise_id: workoutExerciseId,
+        p_set_id: values.id,
+        p_expected_revision: workout.revision,
+        p_operation_id: operationId,
+        p_values: { weight: values.weight, reps: values.reps, duration_seconds: values.duration_seconds, assistance_weight: values.assistance_weight, bodyweight: values.bodyweight, rpe: values.rpe, set_type: values.set_type },
+      })
+      let result = data as { set: WorkoutSet; revision: number } | null
+      if (error) {
+        const [{ data: existing, error: lookupError }, { data: latestWorkout }] = await Promise.all([
+          supabase.from('workout_sets').select(WORKOUT_SET_COLUMNS).eq('id', values.id).maybeSingle(),
+          supabase.from('workouts').select('revision').eq('id', workout.id).maybeSingle(),
+        ])
+        if (lookupError || !existing || !latestWorkout) throw new Error(error.message)
+        result = { set: existing as WorkoutSet, revision: latestWorkout.revision as number }
+      }
+      if (!result) throw new Error('Set could not be added.')
+      setWorkouts((current) => current.map((candidate) => candidate.id === workout.id ? { ...candidate, revision: result.revision } : candidate))
+      workoutsRef.current = workoutsRef.current.map((candidate) => candidate.id === workout.id ? { ...candidate, revision: result.revision } : candidate)
+      return result.set
+    })
+    mutationQueueRef.current = task.then(() => undefined)
+    try { return await task } catch (error) { setStatus({ tone: 'danger', message: error instanceof Error ? error.message : 'Set could not be added.' }); return null }
   }
 
   async function updateSet(set: WorkoutSet, patch: Partial<WorkoutSet>) {
@@ -601,50 +779,208 @@ export function App() {
     setSets((current) => current.map((candidate) => (candidate.id === set.id ? next : candidate)))
     setSelectedExerciseSets((current) => current.map((candidate) => (candidate.id === set.id ? next : candidate)))
 
-    const { error } = await supabase.from('workout_sets').update(patch).eq('id', set.id)
-    if (error) {
+    const workoutExercise = workoutExercises.find((item) => item.id === set.workout_exercise_id)
+    const workout = workoutExercise ? workoutById.get(workoutExercise.workout_id) : null
+    if (!session || !workout) return
+    const operation: SetMutation = {
+      operationId: crypto.randomUUID(),
+      userId: session.user.id,
+      workoutId: workout.id,
+      setId: set.id,
+      expectedRevision: workout.revision,
+      patch,
+      createdAt: new Date().toISOString(),
+    }
+    try {
+      await queueSetMutation(operation)
+      markSetSync(set.id, 'pending')
+      if (navigator.onLine) enqueueSetMutation(operation)
+    } catch {
       setSets((current) => current.map((candidate) => (candidate.id === set.id ? set : candidate)))
       setSelectedExerciseSets((current) => current.map((candidate) => (candidate.id === set.id ? set : candidate)))
-      setStatus({ tone: 'danger', message: error.message })
+      setStatus({ tone: 'danger', message: 'Unable to preserve this edit for retry.' })
     }
+  }
+
+  function enqueueSetMutation(operation: SetMutation) {
+    mutationQueueRef.current = mutationQueueRef.current
+      .catch(() => undefined)
+      .then(() => saveSetMutation(operation))
+      .catch(() => {
+        markSetSync(operation.setId, 'failed')
+        setStatus({ tone: 'danger', message: 'Edit preserved. It will retry when the connection returns.' })
+      })
+  }
+
+  async function saveSetMutation(operation: SetMutation) {
+    const persisted = await getSetMutation(operation.operationId)
+    if (!persisted || persisted.state === 'conflict') return
+    operation = persisted
+    const firstForWorkout = (await listSetMutations(operation.userId)).find((candidate) => candidate.workoutId === operation.workoutId)
+    if (firstForWorkout?.operationId !== operation.operationId) return
+    const workout = workoutsRef.current.find((item) => item.id === operation.workoutId)
+    if (!workout) return
+    const { data, error } = await supabase.rpc('save_workout_set', {
+      p_workout_id: operation.workoutId,
+      p_set_id: operation.setId,
+      p_expected_revision: operation.expectedRevision,
+      p_operation_id: operation.operationId,
+      p_patch: operation.patch,
+    })
+    if (error) {
+      markSetSync(operation.setId, 'failed')
+      setStatus({
+        tone: error.code === '40001' ? 'warning' : 'danger',
+        message: error.code === '40001' ? 'Workout changed elsewhere. Reloaded latest data; review the failed edit.' : error.message,
+      })
+      if (error.code === '40001') await loadData(false)
+      if (error.code === '40001') {
+        await markWorkoutMutationsConflict(operation.userId, operation.workoutId)
+        await refreshConflicts(operation.userId)
+      }
+      return
+    }
+    const result = data as { set: WorkoutSet; revision: number }
+    const workoutExercise = workoutExercises.find((item) => item.id === result.set.workout_exercise_id)
+    const priorSets = workoutExercise ? sets.filter((candidate) => candidate.id !== result.set.id && isWorkingSet(candidate) &&
+      workoutExercises.some((item) => item.id === candidate.workout_exercise_id && item.exercise_id === workoutExercise.exercise_id && item.logging_mode === workoutExercise.logging_mode && workoutById.get(item.workout_id)?.completed_at)) : []
+    const record = workoutExercise && isWorkingSet(result.set) ? describeLiveRecord(result.set, priorSets, workoutExercise.logging_mode) : null
+    setWorkouts((current) => current.map((candidate) => candidate.id === operation.workoutId ? { ...candidate, revision: result.revision } : candidate))
+    workoutsRef.current = workoutsRef.current.map((candidate) => candidate.id === operation.workoutId ? { ...candidate, revision: result.revision } : candidate)
+    await removeSetMutation(operation.operationId)
+    await rebasePendingWorkoutMutations(operation.userId, operation.workoutId, result.revision)
+    const later = (await listSetMutations(operation.userId)).filter((candidate) => candidate.setId === operation.setId)
+    const visibleSet = later.reduce((current, candidate) => ({ ...current, ...candidate.patch }), result.set)
+    setSets((current) => current.map((candidate) => candidate.id === operation.setId ? visibleSet : candidate))
+    setSelectedExerciseSets((current) => current.map((candidate) => candidate.id === operation.setId ? visibleSet : candidate))
+    if (record && prAlertsEnabled) setStatus({ tone: 'success', message: `New personal record: ${record}.` })
+    setSetSyncState((current) => {
+      const next = new Map(current)
+      if (later.length) next.set(operation.setId, 'pending')
+      else next.delete(operation.setId)
+      return next
+    })
+  }
+
+  function markSetSync(setId: string, state: 'pending' | 'failed') {
+    setSetSyncState((current) => new Map(current).set(setId, state))
+  }
+
+  async function refreshConflicts(userId: string) {
+    const operations = await listSetMutations(userId, true)
+    setConflictedMutations(operations.filter((operation) => operation.state === 'conflict'))
+  }
+
+  async function retryConflicts() {
+    for (const conflict of conflictedMutations) {
+      const operation = { ...conflict, operationId: crypto.randomUUID(), expectedRevision: workoutsRef.current.find((item) => item.id === conflict.workoutId)?.revision ?? conflict.expectedRevision, state: 'pending' as const, createdAt: new Date().toISOString() }
+      await queueSetMutation(operation)
+      await removeSetMutation(conflict.operationId)
+      markSetSync(operation.setId, 'pending')
+      enqueueSetMutation(operation)
+    }
+    setConflictedMutations([])
+  }
+
+  async function discardConflicts() {
+    await Promise.all(conflictedMutations.map((operation) => removeSetMutation(operation.operationId)))
+    setConflictedMutations([])
   }
 
   async function deleteSet(set: WorkoutSet) {
-    setSets((current) => current.filter((candidate) => candidate.id !== set.id))
-    setSelectedExerciseSets((current) => current.filter((candidate) => candidate.id !== set.id))
-
-    const { error } = await supabase.from('workout_sets').delete().eq('id', set.id)
-    if (error) {
-      setSets((current) => [...current, set].sort((left, right) => left.set_order - right.set_order))
-      setSelectedExerciseSets((current) => [...current, set].sort((left, right) => left.set_order - right.set_order))
-      setStatus({ tone: 'danger', message: error.message })
-    }
+    if (!session) return
+    const item = workoutExercises.find((candidate) => candidate.id === set.workout_exercise_id)
+    if (!item) return
+    const pending = (await listSetMutations(session.user.id, true)).some((operation) => operation.setId === set.id)
+    if (pending) { setStatus({ tone: 'warning', message: 'Resolve this set’s unsaved edit before deleting it.' }); return }
+    const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      const workout = workoutsRef.current.find((candidate) => candidate.id === item.workout_id)
+      if (!workout) throw new Error('Workout not found.')
+      const { data, error } = await supabase.rpc('delete_workout_set', { p_workout_id: workout.id, p_set_id: set.id, p_expected_revision: workout.revision, p_operation_id: crypto.randomUUID() })
+      let result = data as { revision: number } | null
+      if (error) {
+        const [{ data: existing, error: lookupError }, { data: latestWorkout }] = await Promise.all([
+          supabase.from('workout_sets').select('id').eq('id', set.id).maybeSingle(),
+          supabase.from('workouts').select('revision').eq('id', workout.id).maybeSingle(),
+        ])
+        if (lookupError || existing || !latestWorkout) throw new Error(error.message)
+        result = { revision: latestWorkout.revision as number }
+      }
+      if (!result) throw new Error('Set could not be deleted.')
+      setWorkouts((current) => current.map((candidate) => candidate.id === workout.id ? { ...candidate, revision: result.revision } : candidate))
+      workoutsRef.current = workoutsRef.current.map((candidate) => candidate.id === workout.id ? { ...candidate, revision: result.revision } : candidate)
+    })
+    mutationQueueRef.current = task
+    try {
+      await task
+      setSets((current) => current.filter((candidate) => candidate.id !== set.id))
+      setSelectedExerciseSets((current) => current.filter((candidate) => candidate.id !== set.id))
+    } catch (error) { setStatus({ tone: 'danger', message: error instanceof Error ? error.message : 'Set could not be deleted.' }) }
   }
 
   async function updateWorkout(workout: Workout, patch: Partial<Workout>) {
-    const previous = workout
     const next = { ...workout, ...patch }
     setWorkouts((current) => current.map((candidate) => (candidate.id === workout.id ? next : candidate)))
+    if (!session) return
+    const operation: WorkoutMutation = { kind: 'workout', operationId: crypto.randomUUID(), userId: session.user.id, workoutId: workout.id, expectedRevision: workout.revision, patch, createdAt: new Date().toISOString() }
+    try { await queueWorkoutMutation(operation); enqueueWorkoutMutation(operation) } catch { setStatus({ tone: 'danger', message: 'Unable to preserve workout changes for retry.' }) }
+  }
 
-    const { error } = await supabase.from('workouts').update(patch).eq('id', workout.id)
+  function enqueueWorkoutMutation(operation: WorkoutMutation) {
+    mutationQueueRef.current = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      const queued = (await listWorkoutMutations(operation.userId)).find((item) => item.operationId === operation.operationId)
+      if (!queued) return
+      const firstForWorkout = (await listWorkoutMutations(operation.userId)).find((item) => item.workoutId === operation.workoutId)
+      if (firstForWorkout?.operationId !== queued.operationId) return
+      const { data, error } = await supabase.rpc('save_workout', { p_workout_id: queued.workoutId, p_expected_revision: queued.expectedRevision, p_operation_id: queued.operationId, p_patch: queued.patch })
+      if (error) { setStatus({ tone: error.code === '40001' ? 'warning' : 'danger', message: error.code === '40001' ? 'Workout changed elsewhere. Review the preserved draft.' : 'Workout change preserved and will retry.' }); return }
+      const result = data as { workout: Workout; revision: number }
+      await removeSetMutation(queued.operationId)
+      const later = (await listWorkoutMutations(queued.userId)).filter((item) => item.workoutId === queued.workoutId)
+      for (const item of later) await queueWorkoutMutation({ ...item, expectedRevision: result.revision })
+      const visible = later.reduce((current, item) => ({ ...current, ...item.patch }), result.workout) as Workout
+      setWorkouts((items) => items.map((item) => item.id === queued.workoutId ? visible : item))
+      workoutsRef.current = workoutsRef.current.map((item) => item.id === queued.workoutId ? result.workout : item)
+    })
+  }
+
+  async function saveWorkoutPatch(workoutId: string, patch: Partial<Workout>) {
+    const current = workoutsRef.current.find((workout) => workout.id === workoutId)
+    if (!current) return false
+    const { data, error } = await supabase.rpc('save_workout', {
+      p_workout_id: workoutId,
+      p_expected_revision: current.revision,
+      p_operation_id: crypto.randomUUID(),
+      p_patch: patch,
+    })
     if (error) {
-      setWorkouts((current) => current.map((candidate) => (candidate.id === workout.id ? previous : candidate)))
-      setStatus({ tone: 'danger', message: error.message })
+      setStatus({ tone: error.code === '40001' ? 'warning' : 'danger', message: error.code === '40001' ? 'Workout changed elsewhere. Latest version loaded.' : error.message })
+      if (error.code === '40001') await loadData(false)
+      return false
     }
+    const result = data as { workout: Workout; revision: number }
+    setWorkouts((items) => items.map((item) => item.id === workoutId ? result.workout : item))
+    workoutsRef.current = workoutsRef.current.map((item) => item.id === workoutId ? result.workout : item)
+    return true
   }
 
   async function finishWorkout() {
     if (!activeWorkout) return
-    const completedAt = new Date().toISOString()
-    const previous = activeWorkout
-    setWorkouts((current) => current.map((candidate) => (candidate.id === activeWorkout.id ? { ...candidate, completed_at: completedAt } : candidate)))
-
-    const { error } = await supabase.from('workouts').update({ completed_at: completedAt }).eq('id', activeWorkout.id)
-    if (error) {
-      setWorkouts((current) => current.map((candidate) => (candidate.id === previous.id ? previous : candidate)))
-      setStatus({ tone: 'danger', message: error.message })
-      return
+    await mutationQueueRef.current.catch(() => undefined)
+    if (session) {
+      const outstanding = (await listSetMutations(session.user.id, true)).filter((operation) => operation.workoutId === activeWorkout.id)
+      const workoutOutstanding = (await listWorkoutMutations(session.user.id)).filter((operation) => operation.workoutId === activeWorkout.id)
+      if (outstanding.length || workoutOutstanding.length) {
+        setStatus({ tone: 'warning', message: 'Resolve unsaved workout edits before finishing this workout.' })
+        return
+      }
     }
+    const started = new Date(activeWorkout.started_at)
+    const isBackdated = started.toDateString() !== new Date().toDateString()
+    const ongoingPauseSeconds = activeWorkout.paused_at ? Math.max(0, Math.round((Date.now() - new Date(activeWorkout.paused_at).getTime()) / 1000)) : 0
+    const durationSeconds = isBackdated ? (activeWorkout.duration_seconds ?? 3600) : Math.max(0, Math.round((Date.now() - started.getTime()) / 1000) - activeWorkout.accumulated_pause_seconds - ongoingPauseSeconds)
+    const completedAt = isBackdated ? new Date(started.getTime() + durationSeconds * 1000).toISOString() : new Date().toISOString()
+    if (!await saveWorkoutPatch(activeWorkout.id, { completed_at: completedAt, duration_seconds: durationSeconds, paused_at: null })) return
 
     setStatus({ tone: 'success', message: 'Workout finished.' })
     navigate('/workout')
@@ -652,6 +988,9 @@ export function App() {
 
   async function discardWorkout() {
     if (!activeWorkout) return
+    await mutationQueueRef.current.catch(() => undefined)
+    const queuedForWorkout = session ? (await listSetMutations(session.user.id, true)).filter((operation) => operation.workoutId === activeWorkout.id) : []
+    const queuedWorkoutChanges = session ? (await listWorkoutMutations(session.user.id)).filter((operation) => operation.workoutId === activeWorkout.id) : []
 
     const workoutId = activeWorkout.id
     const removedWorkoutExercises = workoutExercises.filter((item) => item.workout_id === workoutId)
@@ -671,6 +1010,9 @@ export function App() {
       setStatus({ tone: 'danger', message: error.message })
       return
     }
+
+    await Promise.all([...queuedForWorkout, ...queuedWorkoutChanges].map((operation) => removeSetMutation(operation.operationId)))
+    if (session) await refreshConflicts(session.user.id)
 
     setStatus({ tone: 'success', message: 'Workout discarded.' })
     navigate('/workout')
@@ -701,6 +1043,10 @@ export function App() {
         exercise_order: index,
         target_sets: item.target_sets,
         target_reps: item.target_reps,
+        target_rpe: item.target_rpe,
+        rest_seconds: item.rest_seconds,
+        timer_enabled: item.timer_enabled,
+        superset_group: item.superset_group,
         notes: item.notes,
       }))
       const { error: copyError } = await supabase.from('routine_exercises').insert(copyPayload)
@@ -773,9 +1119,115 @@ export function App() {
       return
     }
 
+    if (replacementWorkoutExerciseId) {
+      const target = workoutExercises.find((item) => item.id === replacementWorkoutExerciseId)
+      setReplacementWorkoutExerciseId(null)
+      setPickerMode(null)
+      if (target) await replaceWorkoutExercise(target, exercise)
+      return
+    }
+
     setPickerMode(null)
     const added = await addExerciseToWorkout(exercise, true)
     if (!added) setPickerMode('workout')
+  }
+
+  async function replaceWorkoutExercise(target: WorkoutExercise, exercise: Exercise) {
+    if (await hasPendingMutationsForExercise(target.id)) { setStatus({ tone: 'warning', message: 'Resolve unsaved set edits before replacing this exercise.' }); return }
+    const completed = (setsByWorkoutExerciseId.get(target.id) ?? []).some((set) => set.is_completed)
+    const result = await mutateWorkoutExercise(target.workout_id, 'replace', { targetId: target.id, newId: crypto.randomUUID(), exercise })
+    if (!result?.workout_exercise) return
+    const inserted = result.workout_exercise
+    setWorkoutExercises((current) => [...current.filter((item) => item.id !== result.removed_id), inserted])
+    if (result.removed_id) setSets((current) => current.filter((set) => set.workout_exercise_id !== result.removed_id))
+    await addSet(inserted.id, exercise.id)
+    setStatus({ tone: 'success', message: completed ? 'Replacement added; completed work kept.' : 'Exercise replaced.' })
+  }
+
+  async function removeWorkoutExercise(item: WorkoutExercise) {
+    if ((setsByWorkoutExerciseId.get(item.id) ?? []).some((set) => set.is_completed)) {
+      setStatus({ tone: 'warning', message: 'Completed work is preserved. Delete its sets before removing the exercise.' })
+      return
+    }
+    if (await hasPendingMutationsForExercise(item.id)) { setStatus({ tone: 'warning', message: 'Resolve unsaved set edits before removing this exercise.' }); return }
+    const result = await mutateWorkoutExercise(item.workout_id, 'remove', { targetId: item.id })
+    if (!result) return
+    setWorkoutExercises((current) => current.filter((candidate) => candidate.id !== item.id))
+    setSets((current) => current.filter((set) => set.workout_exercise_id !== item.id))
+  }
+
+  async function hasPendingMutationsForExercise(workoutExerciseId: string) {
+    if (!session) return false
+    const setIds = new Set((setsByWorkoutExerciseId.get(workoutExerciseId) ?? []).map((set) => set.id))
+    return (await listSetMutations(session.user.id, true)).some((operation) => setIds.has(operation.setId))
+  }
+
+  async function mutateWorkoutExercise(workoutId: string, action: 'add' | 'remove' | 'replace', options: { targetId?: string; newId?: string; exercise?: Exercise; order?: number }) {
+    const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      const workout = workoutsRef.current.find((candidate) => candidate.id === workoutId)
+      if (!workout) throw new Error('Workout not found.')
+      const { data, error } = await supabase.rpc('mutate_workout_exercise', {
+        p_workout_id: workoutId, p_expected_revision: workout.revision, p_operation_id: crypto.randomUUID(), p_action: action,
+        p_target_id: options.targetId ?? null, p_new_id: options.newId ?? null, p_exercise_id: options.exercise?.id ?? null,
+        p_exercise_order: options.order ?? null, p_logging_mode: options.exercise?.logging_mode ?? null, p_source_name: options.exercise?.name ?? null,
+      })
+      if (error) throw Object.assign(new Error(error.message), { code: error.code })
+      const result = data as { workout_exercise: WorkoutExercise | null; removed_id: string | null; revision: number }
+      setWorkouts((current) => current.map((candidate) => candidate.id === workoutId ? { ...candidate, revision: result.revision } : candidate))
+      workoutsRef.current = workoutsRef.current.map((candidate) => candidate.id === workoutId ? { ...candidate, revision: result.revision } : candidate)
+      return result
+    })
+    mutationQueueRef.current = task.then(() => undefined)
+    try { return await task } catch (error) {
+      const conflict = error instanceof Error && 'code' in error && error.code === '40001'
+      setStatus({ tone: conflict ? 'warning' : 'danger', message: conflict ? 'Workout changed elsewhere. Latest version loaded.' : error instanceof Error ? error.message : 'Exercise change could not be saved.' })
+      if (conflict) await loadData(false)
+      return null
+    }
+  }
+
+  async function moveWorkoutExercise(item: WorkoutExercise, direction: -1 | 1) {
+    const items = [...(workoutExercisesByWorkoutId.get(item.workout_id) ?? [])].sort((a, b) => a.exercise_order - b.exercise_order)
+    const index = items.findIndex((candidate) => candidate.id === item.id)
+    const nextIndex = index + direction
+    if (index < 0 || nextIndex < 0 || nextIndex >= items.length) return
+    ;[items[index], items[nextIndex]] = [items[nextIndex], items[index]]
+    const reordered = items.map((candidate, order) => ({ ...candidate, exercise_order: order }))
+    setWorkoutExercises((current) => current.map((candidate) => reordered.find((row) => row.id === candidate.id) ?? candidate))
+    const saved = await saveWorkoutExercisePatches(item.workout_id, reordered.map((candidate) => ({ id: candidate.id, exercise_order: candidate.exercise_order })))
+    if (!saved) {
+      await loadData(false)
+    }
+  }
+
+  async function updateWorkoutExercise(item: WorkoutExercise, patch: Partial<WorkoutExercise>) {
+    const previous = item
+    setWorkoutExercises((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, ...patch } : candidate))
+    const saved = await saveWorkoutExercisePatches(item.workout_id, [{ id: item.id, ...patch }])
+    if (!saved) {
+      setWorkoutExercises((current) => current.map((candidate) => candidate.id === item.id ? previous : candidate))
+    }
+  }
+
+  async function saveWorkoutExercisePatches(workoutId: string, patches: Array<Record<string, unknown>>) {
+    const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      const workout = workoutsRef.current.find((candidate) => candidate.id === workoutId)
+      if (!workout) throw new Error('Workout not found.')
+      const { data, error } = await supabase.rpc('save_workout_exercises', { p_workout_id: workoutId, p_expected_revision: workout.revision, p_operation_id: crypto.randomUUID(), p_patches: patches })
+      if (error) throw Object.assign(new Error(error.message), { code: error.code })
+      const result = data as { workout_exercises: WorkoutExercise[]; revision: number }
+      setWorkoutExercises((current) => current.map((candidate) => result.workout_exercises.find((saved) => saved.id === candidate.id) ?? candidate))
+      setWorkouts((current) => current.map((candidate) => candidate.id === workoutId ? { ...candidate, revision: result.revision } : candidate))
+      workoutsRef.current = workoutsRef.current.map((candidate) => candidate.id === workoutId ? { ...candidate, revision: result.revision } : candidate)
+      return true
+    })
+    mutationQueueRef.current = task.then(() => undefined)
+    try { return await task } catch (error) {
+      const conflict = error instanceof Error && 'code' in error && error.code === '40001'
+      setStatus({ tone: conflict ? 'warning' : 'danger', message: conflict ? 'Workout changed elsewhere. Latest version loaded.' : error instanceof Error ? error.message : 'Exercise change could not be saved.' })
+      if (conflict) await loadData(false)
+      return false
+    }
   }
 
   function addExerciseToRoutineDraft(exercise: Exercise) {
@@ -788,6 +1240,10 @@ export function App() {
         exercise_order: current.exercises.length,
         target_sets: null,
         target_reps: null,
+        target_rpe: null,
+        rest_seconds: null,
+        timer_enabled: true,
+        superset_group: null,
         notes: null,
         created_at: new Date().toISOString(),
       }, exercise)
@@ -849,8 +1305,12 @@ export function App() {
       target_reps: formatRoutineTarget({
         minReps: item.minReps,
         maxReps: item.maxReps,
-        rpe: item.targetRpe,
+        rpe: '',
       }),
+      target_rpe: numberOrNull(item.targetRpe),
+      rest_seconds: item.rest_seconds,
+      timer_enabled: item.timer_enabled,
+      superset_group: item.superset_group,
       notes: item.notes,
     }))
 
@@ -901,7 +1361,7 @@ export function App() {
 
   function updateRoutineExerciseField(
     exerciseId: string,
-    patch: Partial<Pick<DraftRoutineExercise, 'target_sets' | 'minReps' | 'maxReps' | 'targetRpe'>>,
+    patch: Partial<Pick<DraftRoutineExercise, 'target_sets' | 'minReps' | 'maxReps' | 'targetRpe' | 'rest_seconds' | 'timer_enabled'>>,
   ) {
     setRoutineDraft((current) => {
       if (!current) return current
@@ -1021,8 +1481,11 @@ export function App() {
         <ExerciseDetails
           exercise={selectedExercise}
           sets={selectedExerciseSets}
+          workouts={workouts}
+          workoutExercises={workoutExercises}
           open={Boolean(selectedExercise)}
           onClose={() => setSelectedExercise(null)}
+          onOpenWorkout={(workoutId) => navigate(`/history/workout/${workoutId}`)}
           action={renderExerciseDetailsAction(selectedExercise)}
         />
       ) : null}
@@ -1080,6 +1543,7 @@ export function App() {
             exerciseById={exerciseById}
             weeklySummary={weeklySummary}
             onOpenProfile={() => navigate('/profile')}
+            onOpenHistory={() => navigate('/history')}
           />
         )
 
@@ -1115,16 +1579,29 @@ export function App() {
             sets={activeWorkoutSets}
             exerciseById={exerciseById}
             previousSetsByExerciseId={previousSetsByExerciseId}
-            historicalRecordsByExerciseId={historicalRecordsByExerciseId}
+            previousSessionsByExerciseMode={previousSessionsByExerciseMode}
+            previousSessionNoteByExerciseId={previousSessionNoteByExerciseId}
+            historicalRecordsByExerciseMode={historicalRecordsByExerciseMode}
             onCreateWorkout={() => void startEmptyWorkout()}
             onOpenExercisePicker={openWorkoutPicker}
             onOpenExerciseDetails={(exercise) => openExerciseDetails(exercise, 'active-workout')}
             onAddSet={(workoutExerciseId) => void addSet(workoutExerciseId)}
+            onAddWarmups={(workoutExerciseId, targetWeight, barWeight, plates) => void addWarmups(workoutExerciseId, targetWeight, barWeight, plates)}
+            onReplaceExercise={(item) => {
+              setReplacementWorkoutExerciseId(item.id)
+              setPickerMode('workout')
+            }}
+            onRemoveExercise={(item) => void removeWorkoutExercise(item)}
+            onMoveExercise={(item, direction) => void moveWorkoutExercise(item, direction)}
+            onUpdateWorkoutExercise={(item, patch) => void updateWorkoutExercise(item, patch)}
             onUpdateSet={(set, patch) => void updateSet(set, patch)}
             onDeleteSet={(set) => void deleteSet(set)}
             onFinishWorkout={() => void finishWorkout()}
             onDiscardWorkout={() => void discardWorkout()}
             onUpdateWorkout={(workout, patch) => void updateWorkout(workout, patch)}
+            setSyncState={setSyncState}
+            prAlertsEnabled={prAlertsEnabled}
+            onTogglePrAlerts={() => setPrAlertsEnabled((current) => { const next = !current; localStorage.setItem('strengthos:pr-alerts', next ? '1' : '0'); return next })}
           />
         )
 
@@ -1139,6 +1616,37 @@ export function App() {
             isLoading={isInitialLoading}
             loadError={loadError}
             onRetry={() => void loadData(true)}
+            onSelectWorkoutDate={(date) => navigate(`/history/${date}`)}
+            timeZone={accountTimeZone}
+          />
+        )
+
+      case 'history':
+        return (
+          <WorkoutHistoryPage
+            banners={renderBanners()}
+            completedWorkouts={completedWorkouts}
+            workoutExercises={workoutExercises}
+            sets={sets}
+            exerciseById={exerciseById}
+            isLoading={isInitialLoading}
+            loadError={loadError}
+            initialDate={route.date}
+            initialWorkoutId={route.workoutId}
+            onBack={() => navigate('/')}
+            onRetry={() => void loadData(true)}
+            onRepeat={repeatWorkout}
+            onUpdateWorkout={(workout, patch) => void updateWorkout(workout, patch)}
+            onUpdateSet={(set, patch) => void updateSet(set, patch)}
+            onCreateBackdated={async (date) => {
+              if (activeWorkout) {
+                setStatus({ tone: 'warning', message: 'Finish or discard the active workout first.' })
+                return
+              }
+              const startedAt = new Date(`${date}T12:00:00`).toISOString()
+              const workout = await createWorkout('Workout', startedAt, true)
+              if (workout) navigate('/workout/active')
+            }}
           />
         )
 
@@ -1182,6 +1690,9 @@ export function App() {
           <ProfilePage
             session={session}
             banners={renderBanners()}
+            workouts={workouts}
+            workoutExercises={workoutExercises}
+            sets={sets}
             onNavigate={navigate}
             onStatus={setStatus}
           />
@@ -1200,6 +1711,14 @@ export function App() {
         {status ? (
           <DismissibleBanner tone={status.tone} onDismiss={() => setStatus(null)}>
             {status.message}
+          </DismissibleBanner>
+        ) : null}
+        {conflictedMutations.length ? (
+          <DismissibleBanner tone="warning">
+            <div className="space-y-2">
+              <p>{conflictedMutations.length} edit{conflictedMutations.length === 1 ? '' : 's'} conflict with newer workout data.</p>
+              <div className="flex gap-3 text-sm font-semibold"><button type="button" onClick={() => void retryConflicts()}>Apply mine</button><button type="button" onClick={() => void discardConflicts()}>Keep latest</button></div>
+            </div>
           </DismissibleBanner>
         ) : null}
       </div>
@@ -1224,11 +1743,18 @@ function parseRoute(pathname: string): Route {
   if (pathname === '/workout') return { name: 'workout', pathname }
   if (pathname === '/workout/active') return { name: 'active-workout', pathname }
   if (pathname === '/analytics') return { name: 'analytics', pathname }
+  if (pathname === '/history') return { name: 'history', pathname }
   if (pathname === '/exercises') return { name: 'exercises', pathname }
   if (pathname === '/profile') return { name: 'profile', pathname }
   if (pathname === '/login') return { name: 'login', pathname }
   if (pathname === '/oauth/consent') return { name: 'oauth-consent', pathname }
   if (pathname === '/routines/new') return { name: 'routine-new', pathname }
+
+  const historyDateMatch = pathname.match(/^\/history\/(\d{4}-\d{2}-\d{2})$/)
+  if (historyDateMatch) return { name: 'history', pathname, date: historyDateMatch[1] }
+
+  const historyWorkoutMatch = pathname.match(/^\/history\/workout\/([^/]+)$/)
+  if (historyWorkoutMatch) return { name: 'history', pathname, workoutId: historyWorkoutMatch[1] }
 
   const routineMatch = pathname.match(/^\/routines\/([^/]+)\/edit$/)
   if (routineMatch) return { name: 'routine-edit', pathname, routineId: routineMatch[1] }
@@ -1251,20 +1777,60 @@ function workoutDateMs(workout: Workout) {
   return new Date(workout.completed_at ?? workout.started_at).getTime()
 }
 
-function startOfCurrentSunday() {
-  const date = new Date()
-  date.setHours(0, 0, 0, 0)
-  date.setDate(date.getDate() - date.getDay())
-  return date
+function describeLiveRecord(set: WorkoutSet, prior: WorkoutSet[], mode: WorkoutExercise['logging_mode']) {
+  if (mode === 'duration' && set.duration_seconds !== null && set.duration_seconds > Math.max(0, ...prior.map((item) => item.duration_seconds ?? 0))) return `${set.duration_seconds} seconds`
+  if (mode === 'bodyweight_reps' && set.reps !== null && set.reps > Math.max(0, ...prior.map((item) => item.reps ?? 0))) return `${set.reps} reps`
+  if (mode === 'assisted_bodyweight' && set.assistance_weight !== null && set.reps !== null && set.reps > 0) {
+    const comparable = prior.filter((item) => (item.reps ?? 0) >= (set.reps ?? 0) && item.assistance_weight !== null)
+    if (!comparable.length || set.assistance_weight < Math.min(...comparable.map((item) => item.assistance_weight as number))) return `${set.reps} reps with ${set.assistance_weight} lb assistance`
+  }
+  if ((mode === 'weight_reps' || mode === 'weighted_bodyweight') && set.weight !== null && set.reps !== null) {
+    const sameLoadBest = Math.max(0, ...prior.filter((item) => item.weight === set.weight).map((item) => item.reps ?? 0))
+    if (set.reps > sameLoadBest) return `${set.weight} lb for ${set.reps} reps`
+  }
+  return null
+}
+
+
+async function loadSupabaseChildren(
+  table: 'workout_exercises' | 'workout_sets',
+  columns: string,
+  foreignKey: 'workout_id' | 'workout_exercise_id',
+  ids: string[],
+  order: string,
+) {
+  const data: Record<string, unknown>[] = []
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const batch = ids.slice(offset, offset + 100)
+    for (let from = 0; ; from += 1000) {
+      const result = await supabase.from(table).select(columns).in(foreignKey, batch).order(order).range(from, from + 999)
+      if (result.error) return { data: null, error: result.error }
+      data.push(...((result.data ?? []) as unknown as Record<string, unknown>[]))
+      if ((result.data?.length ?? 0) < 1000) break
+    }
+  }
+  return { data, error: null }
 }
 
 function buildSetInsertPayload(workoutExerciseId: string, setOrder: number, defaultSet: WorkoutSet | null) {
   return {
+    id: crypto.randomUUID(),
     workout_exercise_id: workoutExerciseId,
     set_order: setOrder,
     weight: defaultSet?.weight ?? null,
     reps: defaultSet?.reps ?? null,
+    duration_seconds: defaultSet?.duration_seconds ?? null,
+    assistance_weight: defaultSet?.assistance_weight ?? null,
+    bodyweight: defaultSet?.bodyweight ?? null,
+    rpe: null,
+    set_type: 'working',
+    operation_id: crypto.randomUUID(),
   }
+}
+
+function numberOrNull(value: string) {
+  const number = Number(value)
+  return value.trim() && Number.isFinite(number) ? number : null
 }
 
 function applyRoutineOrder(routines: Routine[], routineOrder: string[]) {
@@ -1338,8 +1904,12 @@ function buildRoutineDraft({
             exercise_id: exercise.id,
             exercise_order: index,
             target_sets: null,
-            target_reps: null,
-            notes: null,
+        target_reps: null,
+        target_rpe: null,
+        rest_seconds: null,
+        timer_enabled: true,
+        superset_group: null,
+        notes: null,
             created_at: new Date().toISOString(),
           },
           exercise,
@@ -1363,6 +1933,6 @@ function buildDraftRoutineExercise(item: RoutineExercise, exercise: Exercise | n
     exercise,
     minReps: target.minReps,
     maxReps: target.maxReps,
-    targetRpe: target.rpe,
+    targetRpe: item.target_rpe === null ? target.rpe : String(item.target_rpe),
   }
 }

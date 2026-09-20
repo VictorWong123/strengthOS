@@ -32,7 +32,7 @@ type RoutineEditorPageProps = {
   onCancel: () => void
   onRemoveExercise: (id: string) => void
   onMoveExercise: (id: string, direction: -1 | 1) => void
-  onExerciseFieldChange: (id: string, patch: Partial<Pick<RoutineEditorExercise, 'target_sets' | 'minReps' | 'maxReps' | 'targetRpe'>>) => void
+  onExerciseFieldChange: (id: string, patch: Partial<Pick<RoutineEditorExercise, 'target_sets' | 'minReps' | 'maxReps' | 'targetRpe' | 'rest_seconds' | 'timer_enabled'>>) => void
 }
 
 export function RoutineEditorPage({

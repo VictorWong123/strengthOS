@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Dumbbell, Plus, X } from 'lucide-react'
-import type { Exercise, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
+import { CheckCircle2, Dumbbell, Minus, Plus, Volume2, VolumeX, X } from 'lucide-react'
+import type { Exercise, ExerciseSessionEvidence, LoggingMode, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
+import { calculatePlatesPerSide, exerciseModeKey, isWorkingSet, loadedVolume, progressionSuggestion, warmupSets } from '../lib/trainingMetrics'
 import { ExerciseSummary } from './ExerciseSummary'
 import {
   BottomSheet,
@@ -30,16 +31,26 @@ type Props = {
   sets: WorkoutSet[]
   exerciseById: Map<string, Exercise>
   previousSetsByExerciseId: Map<string, WorkoutSet[]>
-  historicalRecordsByExerciseId: Map<string, ExerciseRecord>
+  previousSessionsByExerciseMode: Map<string, ExerciseSessionEvidence[]>
+  previousSessionNoteByExerciseId: Map<string, string>
+  historicalRecordsByExerciseMode: Map<string, ExerciseRecord>
   onCreateWorkout: () => void
   onOpenExercisePicker: () => void
   onOpenExerciseDetails: (exercise: Exercise) => void
   onAddSet: (workoutExerciseId: string) => void
+  onAddWarmups: (workoutExerciseId: string, targetWeight: number, barWeight: number, plates: number[]) => void
+  onReplaceExercise: (item: WorkoutExercise) => void
+  onRemoveExercise: (item: WorkoutExercise) => void
+  onMoveExercise: (item: WorkoutExercise, direction: -1 | 1) => void
+  onUpdateWorkoutExercise: (item: WorkoutExercise, patch: Partial<WorkoutExercise>) => void
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
   onFinishWorkout: () => void
   onDiscardWorkout: () => void
   onUpdateWorkout: (workout: Workout, patch: Partial<Workout>) => void
+  setSyncState: Map<string, 'pending' | 'failed'>
+  prAlertsEnabled: boolean
+  onTogglePrAlerts: () => void
 }
 
 type ExerciseRecord = {
@@ -71,16 +82,26 @@ export function WorkoutLogger({
   sets,
   exerciseById,
   previousSetsByExerciseId,
-  historicalRecordsByExerciseId,
+  previousSessionsByExerciseMode,
+  previousSessionNoteByExerciseId,
+  historicalRecordsByExerciseMode,
   onCreateWorkout,
   onOpenExercisePicker,
   onOpenExerciseDetails,
   onAddSet,
+  onAddWarmups,
+  onReplaceExercise,
+  onRemoveExercise,
+  onMoveExercise,
+  onUpdateWorkoutExercise,
   onUpdateSet,
   onDeleteSet,
   onFinishWorkout,
   onDiscardWorkout,
   onUpdateWorkout,
+  setSyncState,
+  prAlertsEnabled,
+  onTogglePrAlerts,
 }: Props) {
   const setsByWorkoutExercise = useMemo(() => {
     const grouped = new Map<string, WorkoutSet[]>()
@@ -95,6 +116,11 @@ export function WorkoutLogger({
   const [exerciseRestSeconds, setExerciseRestSeconds] = useState<Map<string, number>>(() => new Map())
   const [restTimerTarget, setRestTimerTarget] = useState<RestTimerTarget | null>(null)
   const [restEndAt, setRestEndAt] = useState<number | null>(null)
+  const [alertsMuted, setAlertsMuted] = useState(() => localStorage.getItem('strengthos:timer-muted') === '1')
+  const [alertVolume, setAlertVolume] = useState(() => Number(localStorage.getItem('strengthos:timer-volume') ?? '0.15'))
+  const [vibrationEnabled, setVibrationEnabled] = useState(() => localStorage.getItem('strengthos:timer-vibration') !== '0')
+  const [keepAwake, setKeepAwake] = useState(false)
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null)
   const [isFinishSheetOpen, setIsFinishSheetOpen] = useState(false)
   const [isDiscardConfirmOpen, setIsDiscardConfirmOpen] = useState(false)
 
@@ -108,15 +134,43 @@ export function WorkoutLogger({
   }, [workoutRestSeconds])
 
   useEffect(() => {
-    setExerciseRestSeconds(new Map())
-    setRestEndAt(null)
+    const rawOverrides = workout ? localStorage.getItem(`strengthos:rest-overrides:${workout.id}`) : null
+    try { setExerciseRestSeconds(new Map(Object.entries(rawOverrides ? JSON.parse(rawOverrides) as Record<string, number> : {}))) } catch { setExerciseRestSeconds(new Map()) }
+    const storedDeadline = workout ? Number(localStorage.getItem(`strengthos:rest:${workout.id}`)) : 0
+    setRestEndAt(storedDeadline > Date.now() ? storedDeadline : null)
     setIsFinishSheetOpen(false)
     setIsDiscardConfirmOpen(false)
   }, [workout?.id])
 
+  useEffect(() => {
+    if (!workout) return
+    const key = `strengthos:rest:${workout.id}`
+    if (restEndAt) localStorage.setItem(key, String(restEndAt))
+    else localStorage.removeItem(key)
+  }, [restEndAt, workout])
+
+  useEffect(() => {
+    if (!keepAwake || !('wakeLock' in navigator)) return
+    let active = true
+    const acquire = () => void (navigator as Navigator & { wakeLock: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> } }).wakeLock.request('screen').then((lock) => {
+        if (active) wakeLockRef.current = lock
+        else void lock.release()
+      })
+      .catch(() => setKeepAwake(false))
+    acquire()
+    const onVisibility = () => { if (document.visibilityState === 'visible' && active) acquire(); else wakeLockRef.current = null }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      active = false
+      document.removeEventListener('visibilitychange', onVisibility)
+      void wakeLockRef.current?.release()
+      wakeLockRef.current = null
+    }
+  }, [keepAwake])
+
   const selectedRestSeconds =
     restTimerTarget?.kind === 'exercise'
-      ? exerciseRestSeconds.get(restTimerTarget.workoutExerciseId) ?? workoutRestSeconds
+      ? exerciseRestSeconds.get(restTimerTarget.workoutExerciseId) ?? workoutExercises.find((item) => item.id === restTimerTarget.workoutExerciseId)?.rest_seconds ?? workoutRestSeconds
       : workoutRestSeconds
 
   function saveRestSeconds(seconds: number) {
@@ -124,6 +178,7 @@ export function WorkoutLogger({
       setExerciseRestSeconds((current) => {
         const next = new Map(current)
         next.set(restTimerTarget.workoutExerciseId, seconds)
+        if (workout) localStorage.setItem(`strengthos:rest-overrides:${workout.id}`, JSON.stringify(Object.fromEntries(next)))
         return next
       })
     } else {
@@ -134,6 +189,36 @@ export function WorkoutLogger({
 
   function startRestTimer(seconds: number) {
     setRestEndAt(Date.now() + seconds * 1000)
+  }
+
+  function completeExerciseSet(item: WorkoutExercise, seconds: number) {
+    if (!item.superset_group) { startRestTimer(seconds); return }
+    const group = workoutExercises.filter((candidate) => candidate.superset_group === item.superset_group)
+    const index = group.findIndex((candidate) => candidate.id === item.id)
+    const next = group[(index + 1) % group.length]
+    if (next && next.id !== group[0]?.id) {
+      document.getElementById(`workout-exercise-${next.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+    startRestTimer(seconds)
+  }
+
+  function toggleSuperset(item: WorkoutExercise) {
+    const index = workoutExercises.findIndex((candidate) => candidate.id === item.id)
+    const neighbor = workoutExercises[index + 1]
+    if (item.superset_group) {
+      for (const member of workoutExercises.filter((candidate) => candidate.superset_group === item.superset_group)) onUpdateWorkoutExercise(member, { superset_group: null })
+    } else if (neighbor) {
+      const group = crypto.randomUUID()
+      onUpdateWorkoutExercise(item, { superset_group: group })
+      onUpdateWorkoutExercise(neighbor, { superset_group: group })
+    }
+  }
+
+  function finishRestTimer() {
+    if (!alertsMuted) playTimerSound(alertVolume)
+    if (vibrationEnabled) navigator.vibrate?.([150, 80, 150])
+    setRestEndAt(null)
   }
 
   if (!workout && isLoading) {
@@ -161,12 +246,20 @@ export function WorkoutLogger({
     <div className="space-y-5 pb-36">
       <header className="grid gap-4">
         <div className="flex items-center justify-between gap-3">
-          <WorkoutTimer startedAt={workout.started_at} />
-          <button type="button" onClick={() => setIsFinishSheetOpen(true)} className="text-sm font-medium text-accent-blue">
-            Finish
-          </button>
+          <div className="flex items-center gap-2">
+            <WorkoutTimer workout={workout} />
+            <button type="button" className="text-sm text-text-secondary" onClick={() => {
+              if (workout.paused_at) {
+                const pausedSeconds = Math.max(0, Math.round((Date.now() - new Date(workout.paused_at).getTime()) / 1000))
+                onUpdateWorkout(workout, { paused_at: null, accumulated_pause_seconds: workout.accumulated_pause_seconds + pausedSeconds })
+              } else {
+                onUpdateWorkout(workout, { paused_at: new Date().toISOString() })
+              }
+            }}>{workout.paused_at ? 'Resume' : 'Pause'}</button>
+          </div>
+          <button type="button" onClick={() => setIsFinishSheetOpen(true)} className="text-sm font-medium text-accent-blue">Finish</button>
         </div>
-        {restEndAt ? <RestTimer endAt={restEndAt} onClear={() => setRestEndAt(null)} /> : null}
+        {restEndAt ? <RestTimer endAt={restEndAt} onChange={setRestEndAt} onClear={() => setRestEndAt(null)} onComplete={finishRestTimer} /> : null}
         <SurfaceCard className="space-y-4">
           <Field label="Workout name">
             <Input
@@ -193,6 +286,24 @@ export function WorkoutLogger({
             value={formatRestDuration(workoutRestSeconds)}
             onClick={() => setRestTimerTarget({ kind: 'workout' })}
           />
+          <div className="grid grid-cols-2 gap-2">
+            <SecondaryButton onClick={() => {
+              const next = !alertsMuted
+              setAlertsMuted(next)
+              localStorage.setItem('strengthos:timer-muted', next ? '1' : '0')
+            }}>
+              {alertsMuted ? <VolumeX className="h-4 w-4" aria-hidden="true" /> : <Volume2 className="h-4 w-4" aria-hidden="true" />}
+              {alertsMuted ? 'Muted' : 'Sound on'}
+            </SecondaryButton>
+            <SecondaryButton onClick={() => setKeepAwake((current) => !current)} aria-pressed={keepAwake}>
+              {keepAwake ? 'Screen awake' : 'Keep awake'}
+            </SecondaryButton>
+            <SecondaryButton onClick={() => { const next = !vibrationEnabled; setVibrationEnabled(next); localStorage.setItem('strengthos:timer-vibration', next ? '1' : '0') }} aria-pressed={vibrationEnabled}>
+              {vibrationEnabled ? 'Vibration on' : 'Vibration off'}
+            </SecondaryButton>
+            <SecondaryButton onClick={onTogglePrAlerts} aria-pressed={prAlertsEnabled}>{prAlertsEnabled ? 'PR alerts on' : 'PR alerts off'}</SecondaryButton>
+            <label className="rounded-xl bg-surface-input px-3 py-2 text-xs text-text-secondary">Alert volume<input aria-label="Alert volume" className="mt-1 w-full" type="range" min="0.05" max="0.5" step="0.05" value={alertVolume} onChange={(event) => { const next = Number(event.target.value); setAlertVolume(next); localStorage.setItem('strengthos:timer-volume', String(next)) }} /></label>
+          </div>
         </SurfaceCard>
       </header>
 
@@ -202,22 +313,33 @@ export function WorkoutLogger({
             <ActiveWorkoutExerciseCard
               key={item.id}
               exercise={exerciseById.get(item.exercise_id) ?? null}
+              workoutExercise={item}
               sets={setsByWorkoutExercise.get(item.id) ?? []}
               previousSets={previousSetsByExerciseId.get(item.exercise_id) ?? []}
+              previousSessions={previousSessionsByExerciseMode.get(exerciseModeKey(item.exercise_id, item.logging_mode)) ?? []}
+              previousSessionNote={previousSessionNoteByExerciseId.get(item.exercise_id) ?? null}
               onOpenDetails={() => {
                 const exercise = exerciseById.get(item.exercise_id)
                 if (exercise) onOpenExerciseDetails(exercise)
               }}
               onAddSet={() => onAddSet(item.id)}
+              onAddWarmups={(targetWeight, barWeight, plates) => onAddWarmups(item.id, targetWeight, barWeight, plates)}
+              onReplace={() => onReplaceExercise(item)}
+              onRemove={() => onRemoveExercise(item)}
+              onMove={(direction) => onMoveExercise(item, direction)}
+              onToggleSuperset={() => toggleSuperset(item)}
+              onUpdateSessionNotes={(session_notes) => onUpdateWorkoutExercise(item, { session_notes })}
+              onUpdateLoggingMode={(logging_mode) => onUpdateWorkoutExercise(item, { logging_mode })}
               workoutRestSeconds={workoutRestSeconds}
               restSecondsOverride={exerciseRestSeconds.get(item.id) ?? null}
-              onStartRestTimer={startRestTimer}
+              onStartRestTimer={(seconds) => completeExerciseSet(item, seconds)}
               onChangeRestSeconds={() => {
                 const exercise = exerciseById.get(item.exercise_id)
                 setRestTimerTarget({ kind: 'exercise', workoutExerciseId: item.id, exerciseName: exercise?.name ?? null })
               }}
               onUpdateSet={onUpdateSet}
               onDeleteSet={onDeleteSet}
+              setSyncState={setSyncState}
             />
           ))
         ) : (
@@ -245,7 +367,7 @@ export function WorkoutLogger({
         workoutExercises={workoutExercises}
         setsByWorkoutExercise={setsByWorkoutExercise}
         exerciseById={exerciseById}
-        historicalRecordsByExerciseId={historicalRecordsByExerciseId}
+        historicalRecordsByExerciseMode={historicalRecordsByExerciseMode}
         onClose={() => setIsFinishSheetOpen(false)}
         onSave={onFinishWorkout}
         onDiscard={() => setIsDiscardConfirmOpen(true)}
@@ -283,7 +405,7 @@ export function WorkoutLogger({
   )
 }
 
-export function WorkoutTimer({ startedAt }: { startedAt: string }) {
+export function WorkoutTimer({ workout }: { workout: Workout }) {
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -291,7 +413,8 @@ export function WorkoutTimer({ startedAt }: { startedAt: string }) {
     return () => window.clearInterval(timer)
   }, [])
 
-  const elapsedMs = Math.max(0, now - new Date(startedAt).getTime())
+  const effectiveNow = workout.paused_at ? new Date(workout.paused_at).getTime() : now
+  const elapsedMs = Math.max(0, effectiveNow - new Date(workout.started_at).getTime() - workout.accumulated_pause_seconds * 1000)
   const hours = Math.floor(elapsedMs / 3_600_000)
   const minutes = Math.floor((elapsedMs % 3_600_000) / 60_000)
   const seconds = Math.floor((elapsedMs % 60_000) / 1000)
@@ -305,9 +428,19 @@ export function WorkoutTimer({ startedAt }: { startedAt: string }) {
 
 export function ActiveWorkoutExerciseCard({
   exercise,
+  workoutExercise,
   sets,
   previousSets,
+  previousSessions,
+  previousSessionNote,
   onAddSet,
+  onAddWarmups,
+  onReplace,
+  onRemove,
+  onMove,
+  onToggleSuperset,
+  onUpdateSessionNotes,
+  onUpdateLoggingMode,
   workoutRestSeconds,
   restSecondsOverride,
   onStartRestTimer,
@@ -315,11 +448,22 @@ export function ActiveWorkoutExerciseCard({
   onOpenDetails,
   onUpdateSet,
   onDeleteSet,
+  setSyncState,
 }: {
   exercise: Exercise | null
+  workoutExercise: WorkoutExercise
   sets: WorkoutSet[]
   previousSets: WorkoutSet[]
+  previousSessions: ExerciseSessionEvidence[]
+  previousSessionNote: string | null
   onAddSet: () => void
+  onAddWarmups: (targetWeight: number, barWeight: number, plates: number[]) => void
+  onReplace: () => void
+  onRemove: () => void
+  onMove: (direction: -1 | 1) => void
+  onToggleSuperset: () => void
+  onUpdateSessionNotes: (notes: string | null) => void
+  onUpdateLoggingMode: (mode: LoggingMode) => void
   workoutRestSeconds: number
   restSecondsOverride: number | null
   onStartRestTimer: (seconds: number) => void
@@ -327,11 +471,14 @@ export function ActiveWorkoutExerciseCard({
   onOpenDetails: () => void
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
+  setSyncState: Map<string, 'pending' | 'failed'>
 }) {
-  const effectiveRestSeconds = restSecondsOverride ?? workoutRestSeconds
+  const effectiveRestSeconds = restSecondsOverride ?? workoutExercise.rest_seconds ?? workoutRestSeconds
+  const [suggestionIncrement, setSuggestionIncrement] = useState('5')
+  const suggestion = progressionSuggestion(previousSessions.map((session) => session.sets), workoutExercise.target_reps, workoutExercise.target_rpe, Number(suggestionIncrement), workoutExercise.logging_mode, workoutExercise.target_sets ?? sets.length)
 
   return (
-    <SurfaceCard className="space-y-4">
+    <SurfaceCard id={`workout-exercise-${workoutExercise.id}`} className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         {exercise ? (
           <ExerciseSummary
@@ -357,11 +504,28 @@ export function ActiveWorkoutExerciseCard({
         </div>
       </div>
 
+      {workoutExercise.target_reps || workoutExercise.target_rpe ? (
+        <p className="rounded-xl bg-surface-input px-3 py-2 text-sm text-text-secondary">
+          Target {workoutExercise.target_reps ?? 'reps as planned'}{workoutExercise.target_rpe ? ` @ RPE ${workoutExercise.target_rpe}` : ''}
+        </p>
+      ) : null}
+      <label className="block text-xs text-text-secondary">Logging mode<select className="mt-1 min-h-11 w-full rounded-xl bg-surface-input px-3 text-sm" value={workoutExercise.logging_mode} disabled={sets.some((set) => set.is_completed)} onChange={(event) => onUpdateLoggingMode(event.target.value as LoggingMode)}><option value="weight_reps">Weight + reps</option><option value="bodyweight_reps">Bodyweight reps</option><option value="weighted_bodyweight">Added weight + reps</option><option value="assisted_bodyweight">Assistance + reps</option><option value="duration">Duration</option></select></label>
+      {suggestion ? <div className="rounded-xl border border-accent-blue/20 bg-accent-blue/10 px-3 py-2 text-sm"><span className="font-medium">Next session:</span> {suggestion}<span className="block text-xs text-text-muted">Evidence: {previousSessions.slice(0, 2).map((session) => `${new Date(session.date).toLocaleDateString()}: ${session.sets.filter((set) => set.is_completed && set.set_type !== 'warmup').map(formatPreviousSet).join(', ')}`).join(' · ')}. You can ignore this suggestion.</span><label className="mt-2 block text-xs">Load step (lb)<input className="ml-2 w-16 rounded bg-surface-card px-2 py-1" inputMode="decimal" value={suggestionIncrement} onChange={(event) => setSuggestionIncrement(event.target.value)} /></label></div> : null}
+      <div className="flex flex-wrap gap-3 text-xs font-medium text-text-secondary">
+        <button type="button" className="min-h-11 px-2" onClick={() => onMove(-1)}>Move up</button>
+        <button type="button" className="min-h-11 px-2" onClick={() => onMove(1)}>Move down</button>
+        <button type="button" className="min-h-11 px-2" onClick={onReplace}>Replace</button>
+        <button type="button" onClick={onRemove} className="min-h-11 px-2 text-accent-danger">Remove</button>
+        <button type="button" className="min-h-11 px-2 text-accent-blue" onClick={onToggleSuperset}>{workoutExercise.superset_group ? 'Ungroup' : 'Superset next'}</button>
+      </div>
+      {previousSessionNote ? <p className="text-xs text-text-muted">Previous note: {previousSessionNote}</p> : null}
+      <Textarea defaultValue={workoutExercise.session_notes ?? ''} placeholder="Session observation" onBlur={(event) => onUpdateSessionNotes(event.target.value.trim() || null)} />
+
       <div className="grid grid-cols-[2rem_minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-text-muted">
         <span>Set</span>
         <span>Previous</span>
-        <span>Weight</span>
-        <span>Reps</span>
+        <span>{workoutExercise.logging_mode === 'duration' ? 'Seconds' : workoutExercise.logging_mode === 'assisted_bodyweight' ? 'Assist' : workoutExercise.logging_mode === 'bodyweight_reps' ? 'Reps' : workoutExercise.logging_mode === 'weighted_bodyweight' ? 'Added' : 'Weight'}</span>
+        <span>{workoutExercise.logging_mode === 'duration' || workoutExercise.logging_mode === 'bodyweight_reps' ? '' : 'Reps'}</span>
         <span>Done</span>
       </div>
 
@@ -373,7 +537,9 @@ export function ActiveWorkoutExerciseCard({
             previousSet={previousSets[index] ?? null}
             onUpdateSet={onUpdateSet}
             onDeleteSet={onDeleteSet}
-            onCompleteSet={() => onStartRestTimer(effectiveRestSeconds)}
+            onCompleteSet={() => { if (workoutExercise.timer_enabled && effectiveRestSeconds > 0) onStartRestTimer(effectiveRestSeconds) }}
+            loggingMode={workoutExercise.logging_mode ?? exercise?.logging_mode ?? 'weight_reps'}
+            syncState={setSyncState.get(set.id)}
           />
         ))}
       </div>
@@ -383,7 +549,32 @@ export function ActiveWorkoutExerciseCard({
           Add Set
         </SecondaryButton>
       </div>
+      {workoutExercise.logging_mode === 'weight_reps' ? <PlateWarmupTools onAddWarmups={onAddWarmups} /> : null}
     </SurfaceCard>
+  )
+}
+
+function PlateWarmupTools({ onAddWarmups }: { onAddWarmups: (targetWeight: number, barWeight: number, plates: number[]) => void }) {
+  const [target, setTarget] = useState('135')
+  const [bar, setBar] = useState('45')
+  const [inventory, setInventory] = useState('45,45,35,35,25,25,10,10,5,5,2.5,2.5')
+  const available = inventory.split(',').map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value > 0)
+  const targetWeight = Number(target)
+  const barWeight = Number(bar)
+  const inputsValid = Number.isFinite(targetWeight) && targetWeight >= 0 && Number.isFinite(barWeight) && barWeight >= 0
+  const loading = inputsValid ? calculatePlatesPerSide(targetWeight, barWeight, available) : null
+  const warmups = inputsValid ? warmupSets(targetWeight, available, barWeight) : []
+  return (
+    <details className="rounded-xl bg-surface-input p-3">
+      <summary className="cursor-pointer text-sm font-semibold">Plate & warm-up calculator</summary>
+      <div className="mt-3 space-y-3">
+        <div className="grid grid-cols-2 gap-2"><Input value={target} inputMode="decimal" onChange={(event) => setTarget(event.target.value)} aria-label="Target weight" /><Input value={bar} inputMode="decimal" onChange={(event) => setBar(event.target.value)} aria-label="Bar weight" /></div>
+        <Input value={inventory} onChange={(event) => setInventory(event.target.value)} aria-label="Available plates per side" placeholder="Available plates, comma-separated" />
+        <p className="text-sm text-text-secondary">Per side: {loading?.plates.join(' + ') || 'none'} · loaded {loading?.loadedWeight ?? 0} lb</p>
+        <p className="text-xs text-text-muted">Warm-ups: {warmups.map((set) => `${set.weight}×${set.reps}`).join(', ') || 'none'}</p>
+        <SecondaryButton className="w-full" disabled={!warmups.length} onClick={() => onAddWarmups(targetWeight, barWeight, available)}>Add warm-up sets</SecondaryButton>
+      </div>
+    </details>
   )
 }
 
@@ -393,7 +584,7 @@ function FinishWorkoutSheet({
   workoutExercises,
   setsByWorkoutExercise,
   exerciseById,
-  historicalRecordsByExerciseId,
+  historicalRecordsByExerciseMode,
   onClose,
   onSave,
   onDiscard,
@@ -403,7 +594,7 @@ function FinishWorkoutSheet({
   workoutExercises: WorkoutExercise[]
   setsByWorkoutExercise: Map<string, WorkoutSet[]>
   exerciseById: Map<string, Exercise>
-  historicalRecordsByExerciseId: Map<string, ExerciseRecord>
+  historicalRecordsByExerciseMode: Map<string, ExerciseRecord>
   onClose: () => void
   onSave: () => void
   onDiscard: () => void
@@ -413,7 +604,7 @@ function FinishWorkoutSheet({
     workoutExercises,
     setsByWorkoutExercise,
     exerciseById,
-    historicalRecordsByExerciseId,
+    historicalRecordsByExerciseMode,
   })
 
   return (
@@ -437,7 +628,7 @@ function FinishWorkoutSheet({
     >
       <div className="space-y-4">
         <div className="grid grid-cols-3 gap-3">
-          <MetricCard label="Lifted" value={`${formatNumber(summary.totalVolume)} lb`} valueClassName="text-lg" />
+          <MetricCard label="Loaded" value={`${formatNumber(summary.totalVolume)} lb`} valueClassName="text-lg" />
           <MetricCard label="Sets" value={String(summary.completedSets)} valueClassName="text-lg" />
           <MetricCard label="Time" value={formatDuration(summary.durationSeconds)} valueClassName="text-lg" />
         </div>
@@ -466,7 +657,7 @@ function FinishWorkoutSheet({
   )
 }
 
-export function RestTimer({ endAt, onClear }: { endAt: number; onClear: () => void }) {
+export function RestTimer({ endAt, onChange, onClear, onComplete }: { endAt: number; onChange: (value: number) => void; onClear: () => void; onComplete: () => void }) {
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -479,8 +670,8 @@ export function RestTimer({ endAt, onClear }: { endAt: number; onClear: () => vo
 
   useEffect(() => {
     if (remainingMs > 0) return
-    onClear()
-  }, [onClear, remainingMs])
+    onComplete()
+  }, [onComplete, remainingMs])
 
   return (
     <div className="flex items-center justify-between rounded-2xl border border-accent-done/20 bg-surface-success px-4 py-3 text-sm">
@@ -488,9 +679,11 @@ export function RestTimer({ endAt, onClear }: { endAt: number; onClear: () => vo
         <div className="font-semibold text-accent-done">Rest timer running</div>
         <div className="text-text-secondary">{formatRestDuration(seconds)} remaining</div>
       </div>
-      <button type="button" onClick={onClear} className="text-text-secondary">
-        <X className="h-4 w-4" aria-hidden="true" />
-      </button>
+      <div className="flex items-center gap-1">
+        <button type="button" onClick={() => onChange(Math.max(Date.now(), endAt - 15_000))} className="touch-target rounded-lg p-2 text-text-secondary" aria-label="Subtract 15 seconds"><Minus className="h-4 w-4" aria-hidden="true" /></button>
+        <button type="button" onClick={() => onChange(endAt + 15_000)} className="touch-target rounded-lg p-2 text-text-secondary" aria-label="Add 15 seconds"><Plus className="h-4 w-4" aria-hidden="true" /></button>
+        <button type="button" onClick={onClear} className="touch-target rounded-lg p-2 text-text-secondary" aria-label="Skip rest timer"><X className="h-4 w-4" aria-hidden="true" /></button>
+      </div>
     </div>
   )
 }
@@ -501,21 +694,31 @@ export const SetRow = memo(function SetRow({
   onUpdateSet,
   onDeleteSet,
   onCompleteSet,
+  loggingMode,
+  syncState,
 }: {
   set: WorkoutSet
   previousSet: WorkoutSet | null
   onUpdateSet: (set: WorkoutSet, patch: Partial<WorkoutSet>) => void
   onDeleteSet: (set: WorkoutSet) => void
   onCompleteSet: () => void
+  loggingMode: LoggingMode
+  syncState?: 'pending' | 'failed'
 }) {
   const [weightDraft, setWeightDraft] = useState(formatValue(set.weight))
   const [repsDraft, setRepsDraft] = useState(formatValue(set.reps))
+  const [durationDraft, setDurationDraft] = useState(formatValue(set.duration_seconds))
+  const [assistanceDraft, setAssistanceDraft] = useState(formatValue(set.assistance_weight))
+  const [rpeDraft, setRpeDraft] = useState(formatValue(set.rpe))
 
   useEffect(() => setWeightDraft(formatValue(set.weight)), [set.weight])
   useEffect(() => setRepsDraft(formatValue(set.reps)), [set.reps])
+  useEffect(() => setDurationDraft(formatValue(set.duration_seconds)), [set.duration_seconds])
+  useEffect(() => setAssistanceDraft(formatValue(set.assistance_weight)), [set.assistance_weight])
+  useEffect(() => setRpeDraft(formatValue(set.rpe)), [set.rpe])
 
-  function commitNumber(field: 'weight' | 'reps', draft: string) {
-    const currentValue = field === 'weight' ? set.weight : set.reps
+  function commitNumber(field: 'weight' | 'reps' | 'duration_seconds' | 'assistance_weight' | 'rpe', draft: string) {
+    const currentValue = set[field]
     const currentDraft = formatValue(currentValue)
     const trimmed = draft.trim()
 
@@ -526,9 +729,13 @@ export const SetRow = memo(function SetRow({
     }
 
     const nextValue = Number(trimmed)
-    if (!Number.isFinite(nextValue)) {
+    const invalid = !Number.isFinite(nextValue) || nextValue < 0 || ((field === 'reps' || field === 'duration_seconds') && !Number.isInteger(nextValue)) || (field === 'rpe' && (nextValue < 1 || nextValue > 10))
+    if (invalid) {
       if (field === 'weight') setWeightDraft(currentDraft)
-      else setRepsDraft(currentDraft)
+      else if (field === 'reps') setRepsDraft(currentDraft)
+      else if (field === 'duration_seconds') setDurationDraft(currentDraft)
+      else if (field === 'assistance_weight') setAssistanceDraft(currentDraft)
+      else setRpeDraft(currentDraft)
       return
     }
 
@@ -541,8 +748,13 @@ export const SetRow = memo(function SetRow({
       is_completed: isCompleting,
       completed_at: isCompleting ? new Date().toISOString() : null,
     })
-    if (isCompleting) onCompleteSet()
+    if (isCompleting && set.set_type !== 'drop') onCompleteSet()
   }
+
+  const primaryField = loggingMode === 'duration' ? 'duration_seconds' : loggingMode === 'assisted_bodyweight' ? 'assistance_weight' : loggingMode === 'bodyweight_reps' ? 'reps' : 'weight'
+  const primaryDraft = primaryField === 'duration_seconds' ? durationDraft : primaryField === 'assistance_weight' ? assistanceDraft : primaryField === 'reps' ? repsDraft : weightDraft
+  const setPrimaryDraft = primaryField === 'duration_seconds' ? setDurationDraft : primaryField === 'assistance_weight' ? setAssistanceDraft : primaryField === 'reps' ? setRepsDraft : setWeightDraft
+  const showReps = !['duration', 'bodyweight_reps'].includes(loggingMode)
 
   return (
     <div className={cn('grid grid-cols-[2rem_minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem] gap-2 rounded-2xl p-2', set.is_completed ? 'bg-surface-success ring-1 ring-accent-done/25' : 'bg-surface-input')}>
@@ -552,34 +764,33 @@ export const SetRow = memo(function SetRow({
         className="min-w-0 rounded-xl bg-surface-card px-2 text-left text-xs text-text-secondary"
         onClick={() => {
           if (!previousSet) return
-          if (previousSet.weight !== null) {
-            setWeightDraft(formatValue(previousSet.weight))
-            onUpdateSet(set, { weight: previousSet.weight })
-          }
-          if (previousSet.reps !== null) {
-            setRepsDraft(formatValue(previousSet.reps))
-            onUpdateSet(set, { reps: previousSet.reps })
-          }
+          const patch: Partial<WorkoutSet> = {}
+          if (previousSet.weight !== null) { setWeightDraft(formatValue(previousSet.weight)); patch.weight = previousSet.weight }
+          if (previousSet.reps !== null) { setRepsDraft(formatValue(previousSet.reps)); patch.reps = previousSet.reps }
+          if (previousSet.duration_seconds !== null) { setDurationDraft(formatValue(previousSet.duration_seconds)); patch.duration_seconds = previousSet.duration_seconds }
+          if (previousSet.assistance_weight !== null) { setAssistanceDraft(formatValue(previousSet.assistance_weight)); patch.assistance_weight = previousSet.assistance_weight }
+          onUpdateSet(set, patch)
         }}
       >
         {previousSet ? formatPreviousSet(previousSet) : '--'}
       </button>
       <input
         inputMode="decimal"
-        className="w-full rounded-xl border border-white/10 bg-surface-card px-2 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
-        value={weightDraft}
+        className={cn('w-full rounded-xl border border-white/10 bg-surface-card px-2 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25', !showReps && 'col-span-2')}
+        value={primaryDraft}
         placeholder="0"
-        onChange={(event) => setWeightDraft(event.target.value)}
-        onBlur={() => commitNumber('weight', weightDraft)}
+        aria-label={primaryField.replace('_', ' ')}
+        onChange={(event) => setPrimaryDraft(event.target.value)}
+        onBlur={() => commitNumber(primaryField, primaryDraft)}
       />
-      <input
+      {showReps ? <input
         inputMode="numeric"
         className="w-full rounded-xl border border-white/10 bg-surface-card px-2 py-3 text-base text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/25"
         value={repsDraft}
         placeholder="0"
         onChange={(event) => setRepsDraft(event.target.value)}
         onBlur={() => commitNumber('reps', repsDraft)}
-      />
+      /> : null}
       <button
         type="button"
         className={cn(
@@ -592,6 +803,19 @@ export const SetRow = memo(function SetRow({
       >
         <CheckCircle2 className={cn('mx-auto h-5 w-5', !set.is_completed && 'opacity-45')} aria-hidden="true" />
       </button>
+      <div className="col-span-full grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <label className="text-xs text-text-secondary">Set type
+          <select className="mt-1 w-full rounded-xl border border-white/10 bg-surface-card px-2 py-2 text-sm" value={set.set_type} onChange={(event) => onUpdateSet(set, { set_type: event.target.value as WorkoutSet['set_type'] })}>
+            <option value="working">Working</option><option value="warmup">Warm-up</option><option value="failure">Failure</option><option value="drop">Drop</option>
+          </select>
+        </label>
+        <label className="text-xs text-text-secondary">Actual RPE
+          <input className="mt-1 w-full rounded-xl border border-white/10 bg-surface-card px-2 py-2 text-sm" inputMode="decimal" value={rpeDraft} placeholder="1–10" onChange={(event) => setRpeDraft(event.target.value)} onBlur={() => commitNumber('rpe', rpeDraft)} />
+        </label>
+        <span className={cn('self-end pb-2 text-xs', syncState === 'failed' ? 'text-accent-danger' : 'text-text-muted')} aria-live="polite">
+          {syncState === 'pending' ? 'Saving…' : syncState === 'failed' ? 'Save failed—will retry' : set.is_completed ? 'Saved' : ''}
+        </span>
+      </div>
       <DeleteTextButton className="touch-target col-span-full justify-end text-text-secondary" label="Delete set" onClick={() => onDeleteSet(set)} />
     </div>
   )
@@ -712,13 +936,13 @@ function buildWorkoutSummary({
   workoutExercises,
   setsByWorkoutExercise,
   exerciseById,
-  historicalRecordsByExerciseId,
+  historicalRecordsByExerciseMode,
 }: {
   workout: Workout
   workoutExercises: WorkoutExercise[]
   setsByWorkoutExercise: Map<string, WorkoutSet[]>
   exerciseById: Map<string, Exercise>
-  historicalRecordsByExerciseId: Map<string, ExerciseRecord>
+  historicalRecordsByExerciseMode: Map<string, ExerciseRecord>
 }) {
   const prs: WorkoutPr[] = []
   let totalVolume = 0
@@ -726,18 +950,18 @@ function buildWorkoutSummary({
 
   for (const workoutExercise of workoutExercises) {
     const exercise = exerciseById.get(workoutExercise.exercise_id)
-    const liftSets = (setsByWorkoutExercise.get(workoutExercise.id) ?? []).filter(isLiftSet)
-    if (!liftSets.length) continue
+    const workingSets = (setsByWorkoutExercise.get(workoutExercise.id) ?? []).filter(isWorkingSet)
+    if (!workingSets.length) continue
 
-    const exerciseVolume = liftSets.reduce((total, set) => total + (set.weight ?? 0) * (set.reps ?? 0), 0)
-    const maxWeight = Math.max(...liftSets.map((set) => set.weight ?? 0))
-    const previous = historicalRecordsByExerciseId.get(workoutExercise.exercise_id) ?? { maxWeight: 0, volume: 0 }
+    const exerciseVolume = workingSets.reduce((total, set) => total + loadedVolume(set, workoutExercise.logging_mode), 0)
+    const maxWeight = Math.max(0, ...workingSets.map((set) => set.weight ?? 0))
+    const previous = historicalRecordsByExerciseMode.get(exerciseModeKey(workoutExercise.exercise_id, workoutExercise.logging_mode)) ?? { maxWeight: 0, volume: 0 }
     const exerciseName = exercise?.name ?? 'Exercise'
 
     totalVolume += exerciseVolume
-    completedSets += liftSets.length
+    completedSets += workingSets.length
 
-    if (maxWeight > previous.maxWeight) {
+    if ((workoutExercise.logging_mode === 'weight_reps' || workoutExercise.logging_mode === 'weighted_bodyweight') && maxWeight > previous.maxWeight) {
       prs.push({
         exerciseName,
         kind: 'Max Weight',
@@ -766,10 +990,6 @@ function buildWorkoutSummary({
   }
 }
 
-function isLiftSet(set: WorkoutSet): boolean {
-  return Boolean(set.is_completed && set.weight && set.reps)
-}
-
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
@@ -785,8 +1005,26 @@ function formatValue(value: number | null): string {
   return value === null ? '' : String(value)
 }
 
+function playTimerSound(volume = 0.15) {
+  const AudioContextClass = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!AudioContextClass) return
+  const context = new AudioContextClass()
+  const oscillator = context.createOscillator()
+  const gain = context.createGain()
+  oscillator.frequency.value = 880
+  gain.gain.value = Math.min(0.5, Math.max(0, volume))
+  oscillator.connect(gain).connect(context.destination)
+  oscillator.start()
+  oscillator.stop(context.currentTime + 0.2)
+  oscillator.addEventListener('ended', () => void context.close(), { once: true })
+}
+
 function formatPreviousSet(set: WorkoutSet): string {
-  if (set.weight !== null && set.reps !== null) return `${set.weight} x ${set.reps}`
-  if (set.reps !== null) return `${set.reps} reps`
-  return '--'
+  const effort = set.rpe !== null ? ` @ RPE ${set.rpe}` : ''
+  if (set.duration_seconds !== null) return `${set.duration_seconds}s${effort}`
+  if (set.assistance_weight !== null) return `${set.assistance_weight} lb assist x ${set.reps ?? '—'}${effort}`
+  if (set.weight !== null && set.reps !== null) return `${set.weight} x ${set.reps}${effort}`
+  if (set.weight !== null) return `${set.weight} lb${effort}`
+  if (set.reps !== null) return `${set.reps} reps${effort}`
+  return effort || '--'
 }

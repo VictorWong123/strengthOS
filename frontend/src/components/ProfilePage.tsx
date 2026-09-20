@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { House, LogOut, Trash2 } from 'lucide-react'
+import { ChartNoAxesCombined, House, LogOut, Trophy, Trash2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { Field, IconButton, Input, MobileHeader, Pill, PrimaryButton, SecondaryButton, Select, SurfaceCard, Textarea } from './ui'
+import { TrendChart } from './charts/TrendChart'
+import { DeleteTextButton, Field, IconButton, Input, MetricCard, MobileHeader, Pill, PrimaryButton, SecondaryButton, Select, SurfaceCard, Textarea } from './ui'
+import type { BodyMeasurement, ProgressPhoto, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
+import { isWorkingSet, loadedVolume } from '../lib/trainingMetrics'
 
 const PROFILE_COLUMNS = 'id, display_name, first_name, last_name, age, body_weight_lbs, height_inches, training_goal, training_experience, limitations'
 const apiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
@@ -15,8 +18,17 @@ type StatusMessage = {
 type ProfilePageProps = {
   session: Session | null
   banners: ReactNode
+  workouts: Workout[]
+  workoutExercises: WorkoutExercise[]
+  sets: WorkoutSet[]
   onNavigate: (pathname: string) => void
   onStatus: (status: StatusMessage) => void
+}
+
+type WorkoutPerformance = {
+  workout: Workout
+  volume: number
+  maxWeight: number
 }
 
 type ProfileRow = {
@@ -58,14 +70,42 @@ const EMPTY_PROFILE_DRAFT: ProfileDraft = {
   limitations: '',
 }
 
-export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfilePageProps) {
+function weeklyBodyweightAverage(measurements: BodyMeasurement[]) {
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const values = measurements
+    .filter((item) => item.bodyweight !== null && new Date(`${item.measured_at}T23:59:59`).getTime() >= cutoff)
+    .map((item) => item.bodyweight as number)
+  const source = values.length ? values : measurements.filter((item) => item.bodyweight !== null).slice(0, 1).map((item) => item.bodyweight as number)
+  return source.length ? (source.reduce((sum, value) => sum + value, 0) / source.length).toFixed(1) : '—'
+}
+
+export function ProfilePage({ session, banners, workouts, workoutExercises, sets, onNavigate, onStatus }: ProfilePageProps) {
   const [draft, setDraft] = useState<ProfileDraft>(EMPTY_PROFILE_DRAFT)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [deleteProgress, setDeleteProgress] = useState(0)
   const [isDeleteConfirmed, setIsDeleteConfirmed] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [measurements, setMeasurements] = useState<BodyMeasurement[]>([])
+  const [photos, setPhotos] = useState<Array<ProgressPhoto & { url: string }>>([])
+  const [measurementDraft, setMeasurementDraft] = useState({ measured_at: new Date().toISOString().slice(0, 10), bodyweight: '', chest: '', waist: '', hips: '', left_arm: '', left_thigh: '' })
   const deleteSliderRef = useRef<HTMLDivElement | null>(null)
+  const workoutPerformance = useMemo(
+    () => buildWorkoutPerformance(workouts, workoutExercises, sets),
+    [sets, workoutExercises, workouts],
+  )
+  const bestVolumeWorkout = workoutPerformance.reduce<WorkoutPerformance | null>(
+    (best, workout) => (!best || workout.volume > best.volume ? workout : best),
+    null,
+  )
+  const strongestWorkout = workoutPerformance.reduce<WorkoutPerformance | null>(
+    (best, workout) => (!best || workout.maxWeight > best.maxWeight ? workout : best),
+    null,
+  )
+  const progressData = workoutPerformance.slice(-8).map((performance) => ({
+    label: formatWorkoutDate(performance.workout),
+    value: performance.volume,
+  }))
 
   useEffect(() => {
     if (!session) {
@@ -73,6 +113,7 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
       return
     }
     void loadProfile(session.user.id)
+    void loadTracking()
   }, [session?.user.id])
 
   async function loadProfile(userId: string) {
@@ -125,6 +166,74 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
     onStatus({ tone: 'success', message: 'Profile saved.' })
   }
 
+  async function loadTracking() {
+    const [{ data: measurementRows, error }, { data: photoRows }] = await Promise.all([
+      supabase.from('body_measurements').select('*').order('measured_at', { ascending: false }),
+      supabase.from('progress_photos').select('*').order('measured_at', { ascending: false }),
+    ])
+    if (error) onStatus({ tone: 'danger', message: error.message })
+    setMeasurements((measurementRows ?? []) as BodyMeasurement[])
+    const signed = await Promise.all(((photoRows ?? []) as ProgressPhoto[]).map(async (photo) => {
+      const { data } = await supabase.storage.from('progress-photos').createSignedUrl(photo.storage_path, 300)
+      return { ...photo, url: data?.signedUrl ?? '' }
+    }))
+    setPhotos(signed)
+  }
+
+  async function saveMeasurement() {
+    if (!session) return
+    const payload = Object.fromEntries(Object.entries(measurementDraft).map(([key, value]) => [key, key === 'measured_at' ? value : value ? Number(value) : null]))
+    if (!Object.entries(payload).some(([key, value]) => key !== 'measured_at' && value !== null)) {
+      onStatus({ tone: 'warning', message: 'Enter at least one measurement.' })
+      return
+    }
+    const { error } = await supabase.from('body_measurements').insert({ ...payload, user_id: session.user.id })
+    if (error) onStatus({ tone: 'danger', message: error.message })
+    else {
+      onStatus({ tone: 'success', message: 'Measurement saved.' })
+      await loadTracking()
+    }
+  }
+
+  async function uploadPhoto(file: File) {
+    if (!session || !apiUrl) {
+      onStatus({ tone: 'danger', message: 'Photo service is not configured.' })
+      return
+    }
+    let response: Response
+    try {
+      response = await fetch(`${apiUrl}/progress-photos?measured_at=${measurementDraft.measured_at}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${session.access_token}`, 'content-type': file.type || 'application/octet-stream' },
+        body: file,
+      })
+    } catch {
+      onStatus({ tone: 'danger', message: 'Photo upload failed. Check your connection and retry.' })
+      return
+    }
+    if (!response.ok) {
+      onStatus({ tone: 'danger', message: (await response.json().catch(() => null))?.detail ?? 'Photo upload failed.' })
+      return
+    }
+    onStatus({ tone: 'success', message: 'Private photo saved.' })
+    await loadTracking()
+  }
+
+  async function deleteMeasurement(id: string) {
+    const { error } = await supabase.from('body_measurements').delete().eq('id', id)
+    if (error) onStatus({ tone: 'danger', message: error.message })
+    else await loadTracking()
+  }
+
+  async function deletePhoto(id: string) {
+    if (!session || !apiUrl) return
+    let response: Response
+    try { response = await fetch(`${apiUrl}/progress-photos/${id}`, { method: 'DELETE', headers: { authorization: `Bearer ${session.access_token}` } }) }
+    catch { onStatus({ tone: 'danger', message: 'Photo could not be deleted. Check your connection and retry.' }); return }
+    if (!response.ok) onStatus({ tone: 'danger', message: 'Photo could not be deleted.' })
+    else await loadTracking()
+  }
+
   return (
     <div className="space-y-6">
       <MobileHeader
@@ -136,6 +245,41 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
         }
       />
       {banners}
+      <SurfaceCard className="space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Workout progress</h2>
+            <p className="mt-1 text-sm text-text-secondary">Your strongest completed sessions.</p>
+          </div>
+          <ChartNoAxesCombined className="mt-1 h-5 w-5 text-accent-blue" aria-hidden="true" />
+        </div>
+        {workoutPerformance.length ? (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <MetricCard
+                label="Best volume"
+                value={`${formatNumber(bestVolumeWorkout?.volume ?? 0)} lb`}
+                detail={bestVolumeWorkout ? workoutLabel(bestVolumeWorkout.workout) : undefined}
+                className="border border-white/10"
+                valueClassName="text-2xl"
+              />
+              <MetricCard
+                label="Heaviest lift"
+                value={`${formatNumber(strongestWorkout?.maxWeight ?? 0)} lb`}
+                detail={strongestWorkout ? workoutLabel(strongestWorkout.workout) : undefined}
+                className="border border-white/10"
+                valueClassName="text-2xl"
+              />
+            </div>
+            <TrendChart title="Volume over time" unit="lb" data={progressData} tone="blue" />
+          </>
+        ) : (
+          <div className="rounded-card border border-white/10 bg-surface-input p-5 text-center">
+            <Trophy className="mx-auto h-5 w-5 text-text-secondary" aria-hidden="true" />
+            <p className="mt-2 text-sm text-text-secondary">Complete weighted sets to see your best workouts and progress.</p>
+          </div>
+        )}
+      </SurfaceCard>
       <SurfaceCard className="space-y-4">
         <div>
           <h2 className="text-xl font-semibold">Account</h2>
@@ -249,6 +393,29 @@ export function ProfilePage({ session, banners, onNavigate, onStatus }: ProfileP
             {isSaving ? 'Saving' : 'Save'}
           </PrimaryButton>
         </div>
+      </SurfaceCard>
+      <SurfaceCard className="space-y-4">
+        <div><h2 className="text-xl font-semibold">Measurements</h2><p className="mt-1 text-sm text-text-secondary">Dated bodyweight and circumference history.</p></div>
+        <Input type="date" aria-label="Measurement date" value={measurementDraft.measured_at} onChange={(event) => setMeasurementDraft((current) => ({ ...current, measured_at: event.target.value }))} />
+        <div className="grid grid-cols-2 gap-3">
+          {([['bodyweight', 'Weight (lb)'], ['chest', 'Chest (in)'], ['waist', 'Waist (in)'], ['hips', 'Hips (in)'], ['left_arm', 'Arm (in)'], ['left_thigh', 'Thigh (in)']] as const).map(([key, label]) => (
+            <Field key={key} label={label}><Input inputMode="decimal" value={measurementDraft[key]} onChange={(event) => setMeasurementDraft((current) => ({ ...current, [key]: event.target.value }))} /></Field>
+          ))}
+        </div>
+        <PrimaryButton className="w-full" onClick={() => void saveMeasurement()}>Save measurement</PrimaryButton>
+        {measurements.some((item) => item.bodyweight !== null) ? <TrendChart title="Bodyweight" unit="lb" data={measurements.filter((item) => item.bodyweight !== null).slice(0, 12).reverse().map((item) => ({ label: item.measured_at, value: item.bodyweight ?? 0 }))} tone="blue" /> : null}
+        {measurements.some((item) => item.bodyweight !== null) ? <p className="text-sm text-text-secondary">7-day average: {weeklyBodyweightAverage(measurements)} lb</p> : null}
+        <div className="space-y-2 text-sm text-text-secondary">
+          {measurements.slice(0, 5).map((item) => <div key={item.id} className="flex items-center justify-between rounded-xl bg-surface-input px-3 py-2"><span>{item.measured_at}</span><span>{item.bodyweight !== null ? `${item.bodyweight} lb` : `${item.waist ?? '—'} in waist`}</span><DeleteTextButton label="Delete" onClick={() => void deleteMeasurement(item.id)} /></div>)}
+        </div>
+      </SurfaceCard>
+      <SurfaceCard className="space-y-4">
+        <div><h2 className="text-xl font-semibold">Private progress photos</h2><p className="mt-1 text-sm text-text-secondary">Images are re-encoded and stripped of metadata before storage.</p></div>
+        <Input type="file" accept="image/*" aria-label="Progress photo" onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) void uploadPhoto(file)
+        }} />
+        <div className="grid grid-cols-3 gap-2">{photos.map((photo) => photo.url ? <div key={photo.id}><img className="aspect-square rounded-xl object-cover" src={photo.url} alt={`Progress from ${photo.measured_at}`} /><DeleteTextButton className="mt-1 w-full justify-center" label="Delete" onClick={() => void deletePhoto(photo.id)} /></div> : null)}</div>
       </SurfaceCard>
       <SurfaceCard>
         <SecondaryButton className="w-full" onClick={() => supabase.auth.signOut()}>
@@ -474,4 +641,38 @@ function nullIfBlank(value: string): string | null {
 
 function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)))
+}
+
+function buildWorkoutPerformance(workouts: Workout[], workoutExercises: WorkoutExercise[], sets: WorkoutSet[]): WorkoutPerformance[] {
+  const workoutById = new Map(workouts.map((workout) => [workout.id, workout]))
+  const performanceByWorkoutId = new Map<string, WorkoutPerformance>()
+
+  for (const workoutExercise of workoutExercises) {
+    const workout = workoutById.get(workoutExercise.workout_id)
+    if (!workout?.completed_at) continue
+
+    for (const set of sets) {
+      if (set.workout_exercise_id !== workoutExercise.id || !isWorkingSet(set)) continue
+      const performance = performanceByWorkoutId.get(workout.id) ?? { workout, volume: 0, maxWeight: 0 }
+      performance.volume += loadedVolume(set, workoutExercise.logging_mode)
+      if (workoutExercise.logging_mode === 'weight_reps' || workoutExercise.logging_mode === 'weighted_bodyweight') performance.maxWeight = Math.max(performance.maxWeight, set.weight ?? 0)
+      performanceByWorkoutId.set(workout.id, performance)
+    }
+  }
+
+  return [...performanceByWorkoutId.values()].sort(
+    (left, right) => workoutDateMs(left.workout) - workoutDateMs(right.workout),
+  )
+}
+
+function workoutDateMs(workout: Workout): number {
+  return new Date(workout.completed_at ?? workout.started_at).getTime()
+}
+
+function formatWorkoutDate(workout: Workout): string {
+  return new Date(workout.completed_at ?? workout.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function workoutLabel(workout: Workout): string {
+  return `${workout.name || 'Workout'} · ${formatWorkoutDate(workout)}`
 }

@@ -20,6 +20,21 @@ async def delete_account(user: AuthenticatedUser = Depends(get_authenticated_use
 
     async with SupabaseService(settings) as supabase:
         try:
+            photos = await supabase.select_all(
+                "progress_photos",
+                "storage_path",
+                page_size=1000,
+                user_id=f"eq.{user.id}",
+            )
+            prefix_paths = await supabase.list_storage_objects("progress-photos", f"{user.id}/")
+            await supabase.delete_storage_objects(
+                "progress-photos",
+                sorted(set([str(photo["storage_path"]) for photo in photos] + prefix_paths)),
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail="Unable to clean up private account files.") from exc
+
+        try:
             await supabase.delete_auth_user(user.id)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == status.HTTP_404_NOT_FOUND:

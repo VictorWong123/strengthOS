@@ -24,6 +24,7 @@ class SupabaseService:
         supabase_origin = settings.supabase_url.rstrip("/")
         self.rest_url = f"{supabase_origin}/rest/v1"
         self.auth_url = f"{supabase_origin}/auth/v1"
+        self.storage_url = f"{supabase_origin}/storage/v1"
         token = settings.supabase_service_role_key.get_secret_value()
         self.headers = {
             "apikey": token,
@@ -67,6 +68,12 @@ class SupabaseService:
         )
         response.raise_for_status()
 
+    async def delete(self, table: str, **filters: str) -> None:
+        """Delete rows matching explicit trusted PostgREST filters."""
+
+        response = await self._client.delete(f"{self.rest_url}/{table}", params=filters)
+        response.raise_for_status()
+
     async def delete_auth_user(self, user_id: str) -> None:
         """Delete a Supabase Auth user by id using the service-role key.
 
@@ -94,6 +101,68 @@ class SupabaseService:
         )
         response.raise_for_status()
         return response.json()
+
+    async def rpc(self, function: str, payload: dict[str, Any]) -> Any:
+        """Call a backend-only PostgREST function."""
+
+        response = await self._client.post(f"{self.rest_url}/rpc/{function}", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    async def upload_storage_object(
+        self,
+        bucket: str,
+        path: str,
+        content: bytes,
+        content_type: str,
+    ) -> None:
+        """Upload or replace a private Storage object with the service role."""
+
+        response = await self._client.post(
+            f"{self.storage_url}/object/{bucket}/{path}",
+            headers={"content-type": content_type, "x-upsert": "true"},
+            content=content,
+        )
+        response.raise_for_status()
+
+    async def download_storage_object(self, bucket: str, path: str) -> bytes:
+        """Download one private Storage object with the service role."""
+
+        response = await self._client.get(f"{self.storage_url}/object/{bucket}/{path}")
+        response.raise_for_status()
+        return response.content
+
+    async def delete_storage_objects(self, bucket: str, paths: list[str]) -> None:
+        """Delete exact private Storage paths."""
+
+        if not paths:
+            return
+        response = await self._client.request(
+            "DELETE",
+            f"{self.storage_url}/object/{bucket}",
+            json={"prefixes": paths},
+        )
+        response.raise_for_status()
+
+    async def list_storage_objects(self, bucket: str, prefix: str, *, limit: int = 1000) -> list[str]:
+        """List exact object paths below one trusted private-bucket prefix."""
+
+        paths: list[str] = []
+        offset = 0
+        while True:
+            response = await self._client.post(
+                f"{self.storage_url}/object/list/{bucket}",
+                json={"prefix": prefix, "limit": limit, "offset": offset},
+            )
+            response.raise_for_status()
+            page = response.json()
+            if not isinstance(page, list):
+                raise ValueError("Storage list response was not an array.")
+            names = [item.get("name") for item in page if isinstance(item, dict) and item.get("name")]
+            paths.extend(f"{prefix.rstrip('/')}/{name}" for name in names)
+            if len(page) < limit:
+                return paths
+            offset += limit
 
     async def select(
         self,

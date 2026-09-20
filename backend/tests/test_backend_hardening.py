@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 from pathlib import Path
 
@@ -184,26 +185,26 @@ async def test_exercise_image_proxy_streams_provider_gif(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = make_settings(
+        exercise_api_provider="exercisedb",
         exercise_api_key=SecretStr("rapidapi-key"),
         exercise_api_host="exercisedb.p.rapidapi.com",
     )
-    FakeAsyncClient.requests = []
-    FakeAsyncClient.statuses = [200]
-    FakeAsyncClient.pages = [b"GIF89a"]
     cache_dir = Path("pytest-cache-files-exercise-images-stream")
     shutil.rmtree(cache_dir, ignore_errors=True)
     monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
     monkeypatch.setattr(exercise_images, "IMAGE_CACHE_DIR", cache_dir)
-    monkeypatch.setattr("app.routers.exercise_images.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(exercise_images, "SupabaseService", FakeImageCacheService)
+    monkeypatch.setattr(exercise_images, "read_persistent_cache", async_none)
+    monkeypatch.setattr(exercise_images, "ensure_visible_exercise", async_none)
+    monkeypatch.setattr(exercise_images, "fetch_provider_image", async_provider_image)
 
     try:
-        response = await exercise_images.get_exercise_image("0001", "180")
+        response = await exercise_images.get_exercise_image("0001", "180", auth_dependencies.AuthenticatedUser(id="user-1"))
     finally:
         shutil.rmtree(cache_dir, ignore_errors=True)
 
     assert response.media_type == "image/gif"
-    assert FakeAsyncClient.requests[0]["url"] == "https://exercisedb.p.rapidapi.com/image"
-    assert FakeAsyncClient.requests[0]["params"] == {"exerciseId": "0001", "resolution": "180"}
+    assert response.body == b"GIF89a"
 
 
 @pytest.mark.asyncio
@@ -229,48 +230,95 @@ async def test_exercise_image_proxy_serves_cached_image_without_provider(
 @pytest.mark.asyncio
 async def test_exercise_image_proxy_caps_daily_provider_cache_misses(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(
+        exercise_api_provider="exercisedb",
         exercise_api_key=SecretStr("rapidapi-key"),
         exercise_api_host="exercisedb.p.rapidapi.com",
     )
-    FakeAsyncClient.requests = []
     cache_dir = Path("pytest-cache-files-exercise-images-daily-limit")
     shutil.rmtree(cache_dir, ignore_errors=True)
     monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
     monkeypatch.setattr(exercise_images, "IMAGE_CACHE_DIR", cache_dir)
-    monkeypatch.setattr(exercise_images, "PROVIDER_DAILY_MISS_LIMIT", 0)
-    monkeypatch.setattr("app.routers.exercise_images.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(exercise_images, "SupabaseService", FakeQuotaImageCacheService)
+    monkeypatch.setattr(exercise_images, "read_persistent_cache", async_none)
+    monkeypatch.setattr(exercise_images, "ensure_visible_exercise", async_none)
 
     try:
         with pytest.raises(HTTPException) as exc_info:
-            await exercise_images.get_exercise_image("0001", "180")
+            await exercise_images.get_exercise_image("0001", "180", auth_dependencies.AuthenticatedUser(id="user-1"))
     finally:
         shutil.rmtree(cache_dir, ignore_errors=True)
 
     assert exc_info.value.status_code == 429
-    assert FakeAsyncClient.requests == []
 
 
 @pytest.mark.asyncio
 async def test_exercise_image_proxy_surfaces_provider_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(
+        exercise_api_provider="exercisedb",
         exercise_api_key=SecretStr("rapidapi-key"),
         exercise_api_host="exercisedb.p.rapidapi.com",
     )
 
-    class RateLimitedExerciseDBClient:
-        def __init__(self, _settings: Settings) -> None:
-            return None
-
-        async def get(self, *_args: object, **_kwargs: object) -> FakeResponse:
-            return FakeResponse(b"rate limited", 429)
-
     monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
-    monkeypatch.setattr(exercise_images, "ExerciseDBClient", RateLimitedExerciseDBClient)
+    monkeypatch.setattr(exercise_images, "SupabaseService", FakeImageCacheService)
+    monkeypatch.setattr(exercise_images, "read_persistent_cache", async_none)
+    monkeypatch.setattr(exercise_images, "ensure_visible_exercise", async_none)
+    monkeypatch.setattr(exercise_images, "fetch_provider_image", async_rate_limited_image)
 
     with pytest.raises(HTTPException) as exc_info:
-        await exercise_images.get_exercise_image("0001", "180")
+        await exercise_images.get_exercise_image("0001", "180", auth_dependencies.AuthenticatedUser(id="user-1"))
 
     assert exc_info.value.status_code == 429
+
+
+class FakeImageCacheService:
+    def __init__(self, _settings: Settings) -> None:
+        return None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def rpc(self, *_args: object, **_kwargs: object) -> str:
+        return "claimed"
+
+    async def upload_storage_object(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def upsert(self, *_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def select_all(self, *_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    async def delete_storage_objects(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def delete(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    @staticmethod
+    def in_filter(values) -> str:
+        return f"in.({','.join(values)})"
+
+
+class FakeQuotaImageCacheService(FakeImageCacheService):
+    async def rpc(self, *_args: object, **_kwargs: object) -> str:
+        return "quota"
+
+
+async def async_none(*_args: object, **_kwargs: object):
+    return None
+
+
+async def async_provider_image(*_args: object, **_kwargs: object):
+    return exercise_images.ProviderImage(b"GIF89a", "image/gif", 200)
+
+
+async def async_rate_limited_image(*_args: object, **_kwargs: object):
+    return exercise_images.ProviderImage(b"rate limited", "text/plain", 429)
 
 
 @pytest.mark.asyncio
@@ -279,6 +327,39 @@ async def test_exercise_image_proxy_rejects_invalid_ids() -> None:
         await exercise_images.get_exercise_image("../0001", "180")
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_exercise_image_proxy_coalesces_ten_concurrent_opens(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(
+        exercise_api_provider="exercisedb",
+        exercise_api_key=SecretStr("rapidapi-key"),
+        exercise_api_host="exercisedb.p.rapidapi.com",
+    )
+    cache_dir = Path("pytest-cache-files-exercise-images-concurrent")
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    calls = 0
+
+    async def fetch_once(*_args: object, **_kwargs: object):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        return exercise_images.ProviderImage(b"GIF89a", "image/gif", 200)
+
+    monkeypatch.setattr(exercise_images, "get_settings", lambda: settings)
+    monkeypatch.setattr(exercise_images, "IMAGE_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(exercise_images, "SupabaseService", FakeImageCacheService)
+    monkeypatch.setattr(exercise_images, "read_persistent_cache", async_none)
+    monkeypatch.setattr(exercise_images, "ensure_visible_exercise", async_none)
+    monkeypatch.setattr(exercise_images, "fetch_provider_image", fetch_once)
+    user = auth_dependencies.AuthenticatedUser(id="user-1")
+    try:
+        responses = await asyncio.gather(*[exercise_images.get_exercise_image("concurrent", "180", user) for _ in range(10)])
+    finally:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    assert calls == 1
+    assert all(response.body == b"GIF89a" for response in responses)
 
 
 class FakeResponse:
@@ -452,6 +533,15 @@ def test_delete_account_uses_authenticated_user_id(monkeypatch: pytest.MonkeyPat
 
         async def delete_auth_user(self, user_id: str) -> None:
             calls.append(user_id)
+
+        async def select_all(self, *_args: object, **_kwargs: object) -> list[object]:
+            return []
+
+        async def delete_storage_objects(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        async def list_storage_objects(self, *_args: object, **_kwargs: object) -> list[str]:
+            return []
 
     monkeypatch.setattr(account, "SupabaseService", FakeAccountSupabaseService)
     app = app_main.create_app()
@@ -753,8 +843,8 @@ class FakeTrainingRepository:
         assert user_id == "user-1"
         assert days == 90
         return [
-            {"id": "workout-1", "started_at": "2026-06-01T12:00:00+00:00"},
-            {"id": "workout-2", "started_at": "2026-06-08T12:00:00+00:00"},
+            {"id": "workout-1", "started_at": "2026-06-01T12:00:00+00:00", "completed_at": "2026-06-01T13:00:00+00:00"},
+            {"id": "workout-2", "started_at": "2026-06-08T12:00:00+00:00", "completed_at": "2026-06-08T13:00:00+00:00"},
         ]
 
     async def get_workout_exercises_by_workouts(self, workout_ids: list[str]) -> list[dict[str, object]]:
@@ -802,6 +892,7 @@ async def test_user_profile_returns_recommendation_context(monkeypatch: pytest.M
             "height_inches": 66,
             "training_goal": "strength",
             "training_experience": "intermediate",
-            "limitations": "knee sensitivity",
+                "limitations": "knee sensitivity",
+                "timezone": "America/New_York",
         }
     }

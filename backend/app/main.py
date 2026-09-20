@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from app.auth.dependencies import extract_bearer_token, verify_supabase_token
 from app.config import get_settings
 from app.mcp.server import create_mcp_app
-from app.routers import account, admin, exercise_images, health, oauth_metadata
+from app.routers import account, admin, exercise_images, health, oauth_metadata, progress_photos
 
 
 def create_app() -> FastAPI:
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(account.router)
     app.include_router(admin.router)
     app.include_router(exercise_images.router)
+    app.include_router(progress_photos.router)
     app.mount("/mcp", mcp_app)
 
     @app.middleware("http")

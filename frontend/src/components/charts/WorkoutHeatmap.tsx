@@ -1,12 +1,13 @@
 import { useMemo } from 'react'
 import { BarChart3 } from 'lucide-react'
 import { SurfaceCard, cn } from '../ui'
+import { dateKeyInTimeZone, sundayDateKey } from '../../lib/dateTime'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const HEATMAP_WEEKS = 52
 
-export function WorkoutHeatmap({ dates }: { dates: string[] }) {
-  const cells = useMemo(() => buildHeatmapCells(dates), [dates])
+export function WorkoutHeatmap({ dates, onSelectDate, timeZone }: { dates: string[]; onSelectDate?: (date: string) => void; timeZone: string }) {
+  const cells = useMemo(() => buildHeatmapCells(dates, timeZone), [dates, timeZone])
   const totalWorkouts = dates.length
   const activeDays = cells.filter((cell) => cell.count > 0).length
 
@@ -23,7 +24,16 @@ export function WorkoutHeatmap({ dates }: { dates: string[] }) {
       </div>
       <div className="overflow-x-auto pb-1">
         <div className="grid min-w-[728px] grid-flow-col grid-rows-7 gap-1">
-          {cells.map((cell) => (
+          {cells.map((cell) => cell.count > 0 && onSelectDate ? (
+            <button
+              key={cell.key}
+              type="button"
+              className={cn('h-3 w-3 cursor-pointer rounded-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue focus-visible:ring-offset-1 focus-visible:ring-offset-surface-card', heatmapColor(cell.count))}
+              title={`${cell.label}: ${cell.count} workout${cell.count === 1 ? '' : 's'}`}
+              aria-label={`${cell.label}: ${cell.count} workout${cell.count === 1 ? '' : 's'}`}
+              onClick={() => onSelectDate(cell.key)}
+            />
+          ) : (
             <div
               key={cell.key}
               className={cn('h-3 w-3 rounded-[3px]', heatmapColor(cell.count))}
@@ -37,37 +47,29 @@ export function WorkoutHeatmap({ dates }: { dates: string[] }) {
   )
 }
 
-function buildHeatmapCells(dates: string[]) {
+function buildHeatmapCells(dates: string[], timeZone: string) {
   const countByDate = new Map<string, number>()
   for (const date of dates) {
-    const key = dateKey(new Date(date))
+    const key = dateKeyInTimeZone(date, timeZone)
     countByDate.set(key, (countByDate.get(key) ?? 0) + 1)
   }
 
-  const today = startOfDay(new Date())
-  const end = new Date(today)
-  end.setDate(today.getDate() + (6 - today.getDay()))
+  const startOfWeek = new Date(`${sundayDateKey(timeZone)}T00:00:00Z`)
+  const end = new Date(startOfWeek)
+  end.setUTCDate(startOfWeek.getUTCDate() + 6)
   const start = new Date(end.getTime() - (HEATMAP_WEEKS * 7 - 1) * DAY_MS)
 
   return Array.from({ length: HEATMAP_WEEKS * 7 }, (_, index) => {
     const date = new Date(start.getTime() + index * DAY_MS)
-    const key = dateKey(date)
+    const key = date.toISOString().slice(0, 10)
     return {
       key,
       count: countByDate.get(key) ?? 0,
-      label: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+      label: new Date(`${key}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
     }
   })
 }
 
-function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
-}
-
-function dateKey(date: Date) {
-  const localDate = startOfDay(date)
-  return `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, '0')}-${String(localDate.getDate()).padStart(2, '0')}`
-}
 
 function heatmapColor(count: number) {
   if (count <= 0) return 'bg-white/10'

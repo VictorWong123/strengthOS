@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.27",
   "pydantic-settings>=2.4",
   "fastmcp>=2.0",
+  "Pillow>=12.0,<13",
 ]
 
 [project.optional-dependencies]

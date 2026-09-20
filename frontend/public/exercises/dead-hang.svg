@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" role="img" aria-labelledby="title desc">
+  <title id="title">Dead hang</title>
+  <desc id="desc">Front view: both hands hold a pull-up bar with an overhand grip, arms straight overhead and feet clear of the floor.</desc>
+  <rect width="640" height="400" rx="24" fill="#111827"/>
+  <path d="M210 75H430M180 364H460" stroke="#475569" stroke-width="7" stroke-linecap="round"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M290 166L271 120L253 77M350 166L369 120L387 77" stroke="#e2e8f0" stroke-width="17"/>
+    <path d="M301 250L294 295L288 333M339 250L346 295L352 333" stroke="#e2e8f0" stroke-width="19"/>
+    <path d="M289 337H273M351 337H367" stroke="#e2e8f0" stroke-width="14"/>
+    <path d="M287 174Q320 160 353 174L340 254H300Z" fill="#22d3ee"/>
+  </g>
+  <circle cx="320" cy="137" r="23" fill="#e2e8f0"/>
+  <g font-family="system-ui, sans-serif" text-anchor="middle">
+    <text x="320" y="39" fill="#f8fafc" font-size="27" font-weight="700">DEAD HANG</text>
+    <text x="113" y="183" fill="#cbd5e1" font-size="17">Arms straight</text>
+    <text x="520" y="278" fill="#cbd5e1" font-size="17">Feet clear</text>
+    <text x="320" y="389" fill="#94a3b8" font-size="16">Secure grip • No swinging</text>
+  </g>
+</svg>

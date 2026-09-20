@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" role="img" aria-labelledby="title desc">
+  <title id="title">Cable rope face pull</title>
+  <desc id="desc">Front view of the finish: rope ends beside the face, elbows raised and spread outward. Pull the rope from a cable pulley set around face height.</desc>
+  <rect width="640" height="400" rx="24" fill="#111827"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M272 189L202 182L257 119M368 189L438 182L383 119" stroke="#e2e8f0" stroke-width="18"/>
+    <path d="M291 277L279 336M349 277L361 336" stroke="#e2e8f0" stroke-width="21"/>
+    <path d="M268 192Q320 175 372 192L349 279H291Z" fill="#22d3ee"/>
+    <path d="M320 83L263 118M320 83L377 118M320 83V66" stroke="#fbbf24" stroke-width="5"/>
+    <path d="M252 111L267 126M373 126L388 111" stroke="#94a3b8" stroke-width="11"/>
+    <path d="M278 340H260M362 340H380" stroke="#e2e8f0" stroke-width="14"/>
+  </g>
+  <circle cx="320" cy="143" r="25" fill="#e2e8f0"/>
+  <g font-family="system-ui, sans-serif" text-anchor="middle">
+    <text x="320" y="39" fill="#f8fafc" font-size="27" font-weight="700">FACE PULL</text>
+    <text x="105" y="178" fill="#cbd5e1" font-size="17">Elbows out</text>
+    <text x="526" y="125" fill="#cbd5e1" font-size="17">Hands by face</text>
+    <text x="320" y="382" fill="#94a3b8" font-size="17">Finish position • Return slowly</text>
+  </g>
+</svg>

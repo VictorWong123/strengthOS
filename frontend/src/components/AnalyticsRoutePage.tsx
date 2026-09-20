@@ -13,6 +13,8 @@ type AnalyticsRoutePageProps = {
   isLoading: boolean
   loadError: string | null
   onRetry: () => void
+  onSelectWorkoutDate: (date: string) => void
+  timeZone: string
 }
 
 export function AnalyticsRoutePage({
@@ -24,6 +26,8 @@ export function AnalyticsRoutePage({
   isLoading,
   loadError,
   onRetry,
+  onSelectWorkoutDate,
+  timeZone,
 }: AnalyticsRoutePageProps) {
   return (
     <div className="space-y-6">
@@ -40,7 +44,7 @@ export function AnalyticsRoutePage({
           action={<SecondaryButton onClick={onRetry}>Retry</SecondaryButton>}
         />
       ) : (
-        <AnalyticsPage exercises={exercises} workouts={workouts} workoutExercises={workoutExercises} sets={sets} />
+        <AnalyticsPage exercises={exercises} workouts={workouts} workoutExercises={workoutExercises} sets={sets} onSelectWorkoutDate={onSelectWorkoutDate} timeZone={timeZone} />
       )}
     </div>
   )
