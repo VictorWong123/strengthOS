@@ -7,6 +7,8 @@ database.exercises[0].image_url = '/api/exercise-images/qa-media?resolution=180'
 database.exercises[0].thumbnail_url = database.exercises[0].image_url
 let mediaRequests = 0
 let uploadRequests = 0
+let batchSignRequests = 0
+const batchSignPaths = []
 let abortUpload = false
 const qa = await startHarness({ database, backend: async ({ entry, route, url, database, fulfill }) => {
   assert.match(route.request().headers().authorization ?? '', /^Bearer /, 'Media API requires authenticated request')
@@ -40,6 +42,12 @@ await qa.context.route('https://example.supabase.co/storage/v1/**', async route 
   const request = route.request()
   qa.events.requests.push({ method: request.method(), url: request.url(), body: request.postData() })
   const path = new URL(request.url()).pathname
+  if (request.method() === 'POST' && path === '/storage/v1/object/sign/progress-photos') {
+    batchSignRequests += 1
+    const paths = JSON.parse(request.postData()).paths
+    batchSignPaths.push(paths)
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(paths.slice(0, 2).reverse().map(item => ({ path: item, signedURL: `/object/sign/progress-photos/${item}?token=qa`, signedUrl: `/storage/v1/object/sign/progress-photos/${item}?token=qa` }))) })
+  }
   if (request.method() === 'POST' && path.startsWith('/storage/v1/object/sign/progress-photos/')) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ signedURL: path.replace('/storage/v1', '') + '?token=qa' }) })
   }
@@ -87,6 +95,22 @@ try {
     assert.equal(database.progress_photos.length, 0)
     await photos.getByRole('img').waitFor({ state: 'detached' })
     assert.equal(await photos.getByRole('img').count(), 0)
+  })
+  await check('photo history signs multiple paths in one batch operation and preserves row order', async () => {
+    const requestsBeforeReload = batchSignRequests
+    const batchesBeforeReload = batchSignPaths.length
+    database.progress_photos.push(
+      { id: 'photo-a', user_id: USER, measured_at: '2026-09-03', storage_path: `${USER}/a.jpg`, caption: null, created_at: new Date().toISOString() },
+      { id: 'photo-b', user_id: USER, measured_at: '2026-09-02', storage_path: `${USER}/b.jpg`, caption: null, created_at: new Date().toISOString() },
+      { id: 'photo-c', user_id: USER, measured_at: '2026-09-01', storage_path: `${USER}/c.jpg`, caption: null, created_at: new Date().toISOString() },
+    )
+    await page.reload()
+    const images = page.getByRole('img', { name: /^Progress from/ })
+    await images.first().waitFor()
+    assert(batchSignRequests > requestsBeforeReload)
+    assert(batchSignPaths.slice(batchesBeforeReload).every(paths => paths.length === 3), 'Every StrictMode load should batch all photo paths')
+    assert.equal(await images.count(), 2, 'A partial signing result should omit only the unsigned photo')
+    assert.deepEqual(await images.evaluateAll(items => items.map(item => item.alt)), ['Progress from 2026-09-03', 'Progress from 2026-09-02'])
   })
   await check('photo connection loss is handled without an uncaught exception', async () => {
     abortUpload = true

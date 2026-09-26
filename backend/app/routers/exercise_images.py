@@ -10,6 +10,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Annotated
 from uuid import uuid4
+from weakref import WeakValueDictionary
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,7 +32,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 NEGATIVE_CACHE_SECONDS = 5 * 60
 ALLOWED_CONTENT_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
 
-_fetch_locks: dict[str, asyncio.Lock] = {}
+_fetch_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 _fetch_locks_guard = Lock()
 
 

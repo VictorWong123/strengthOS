@@ -1,0 +1,10 @@
+.git
+**/.env*
+**/.mcp.json
+**/test-account.txt
+**/.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.cache
+frontend/dist

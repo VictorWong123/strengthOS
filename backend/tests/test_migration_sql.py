@@ -15,6 +15,13 @@ TRAINING_FEATURES_MIGRATION_SQL = (
     / "20260919233018_add_training_features.sql"
 ).read_text(encoding="utf-8")
 
+WORKOUT_OPERATION_INDEXES_SQL = (
+    Path(__file__).resolve().parents[2]
+    / "supabase"
+    / "migrations"
+    / "20260926035856_index_workout_operations.sql"
+).read_text(encoding="utf-8")
+
 
 def test_workout_sets_update_policy_checks_new_owner() -> None:
     policy_start = MIGRATION_SQL.index(
@@ -71,3 +78,8 @@ def test_training_tables_have_owner_rls_and_input_constraints() -> None:
     assert "body_measurements_has_value" in TRAINING_FEATURES_MIGRATION_SQL
     assert "workout_sets_rpe_range" in TRAINING_FEATURES_MIGRATION_SQL
     assert "workout_exercises_logging_mode_check" in TRAINING_FEATURES_MIGRATION_SQL
+
+
+def test_workout_operation_foreign_keys_are_indexed() -> None:
+    assert "on public.workout_operations (user_id, created_at)" in WORKOUT_OPERATION_INDEXES_SQL
+    assert "on public.workout_operations (workout_id)" in WORKOUT_OPERATION_INDEXES_SQL

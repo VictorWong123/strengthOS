@@ -168,7 +168,7 @@ export async function startHarness({ width = 390, height = 844, rpc = {}, databa
       return fulfill({ message: failure.message, code: 'QA503' }, failure.status)
     }
     if (url.origin === 'https://example.supabase.co') {
-      if (url.pathname === '/auth/v1/user') return fulfill(user)
+      if (url.pathname === '/auth/v1/user') return fulfill(actor && actor !== user.id ? { ...user, id: actor, email: 'qa-other@example.test' } : user)
       if (url.pathname === '/auth/v1/token') return fulfill(session)
       if (url.pathname === '/auth/v1/logout') return fulfill(undefined, 204)
       if (url.pathname.startsWith('/rest/v1/rpc/')) {

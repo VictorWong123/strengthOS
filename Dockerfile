@@ -1,14 +1,16 @@
 FROM python:3.11-slim
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /bin/
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-COPY backend/pyproject.toml ./pyproject.toml
-COPY backend/app ./app
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --frozen --no-dev --no-cache
 
-RUN pip install --no-cache-dir .
+COPY backend/app ./app
 
 EXPOSE 8000
 

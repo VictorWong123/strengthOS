@@ -119,32 +119,42 @@ await scenario('older acknowledgement cannot replace a newer unsaved edit', asyn
   await until(async () => await weight.inputValue() === '155', 'Latest queued draft must be visible after reload')
 })
 
-await scenario('queued edits stay isolated after logout and a different account signs in', async ({ qa, page, edit, countRequests }) => {
-  qa.failure.predicate = request => request.url.includes('/rpc/save_workout_set')
-  qa.failure.once = false
+await scenario('token refresh does not reload account data', async ({ qa, page }) => {
+  const before = qa.events.requests.filter(request => request.url.includes('/rest/v1/')).length
+  const refreshed = await page.evaluate(() => JSON.parse(localStorage.getItem('sb-example-auth-token')))
+  refreshed.access_token = refreshed.access_token.slice(0, -2) + 'zz'
+  await page.evaluate(async session => {
+    const { supabase } = await import('/src/lib/supabase.ts')
+    await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token })
+  }, refreshed)
+  await new Promise(resolve => setTimeout(resolve, 300))
+  assert.equal(qa.events.requests.filter(request => request.url.includes('/rest/v1/')).length, before)
+})
+
+await scenario('queued edits stay isolated when a different account signs in', async ({ qa, page, edit, countRequests }) => {
+  qa.mutationControl.delayMs = 350
   await edit('145')
-  await until(() => countRequests() === 1, 'One edit queued for accountA')
-  await page.goto(`${BASE}/profile`)
+  await edit('155')
+  await until(() => countRequests() === 1, 'First accountA edit should be in flight while the second waits')
+  await page.getByRole('button', { name: 'Profile', exact: true }).click()
+  await page.getByRole('heading', { name: 'Profile', exact: true }).waitFor()
   const switchingSession = await page.evaluate(() => JSON.parse(localStorage.getItem('sb-example-auth-token')))
-  await page.getByRole('button', { name: 'Logout', exact: true }).click()
-  await page.waitForFunction(() => localStorage.getItem('sb-example-auth-token') === null)
   const before = countRequests()
-  qa.failure.predicate = null
   qa.database.workouts = []
   qa.database.workout_exercises = []
   qa.database.workout_sets = []
   qa.database.routines = []
   qa.database.routine_exercises = []
-  await page.evaluate(session => {
-    session.user.id = '10000000-0000-4000-8000-000000000099'
-    session.user.email = 'qa-other@example.test'
-    const claims = { sub: session.user.id, aud: 'authenticated', role: 'authenticated', exp: 2208988800 }
-    session.access_token = session.access_token.split('.')[0] + '.' + btoa(JSON.stringify(claims)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_') + '.qa'
-    localStorage.setItem('sb-example-auth-token', JSON.stringify(session))
+  switchingSession.user.id = '10000000-0000-4000-8000-000000000099'
+  switchingSession.user.email = 'qa-other@example.test'
+  const claims = { sub: switchingSession.user.id, aud: 'authenticated', role: 'authenticated', exp: 2208988800 }
+  switchingSession.access_token = switchingSession.access_token.split('.')[0] + '.' + Buffer.from(JSON.stringify(claims)).toString('base64url') + '.qa'
+  await page.evaluate(async session => {
+    const { supabase } = await import('/src/lib/supabase.ts')
+    await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token })
   }, switchingSession)
-  await page.goto(`${BASE}/workout/active`)
-  await page.getByText('No active workout', { exact: true }).waitFor()
-  await new Promise(resolve => setTimeout(resolve, 200))
+  await page.getByText('qa-other@example.test', { exact: true }).waitFor()
+  await new Promise(resolve => setTimeout(resolve, 800))
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('sb-example-auth-token')).user.id), '10000000-0000-4000-8000-000000000099')
   const laterCalls = qa.events.requests.filter(request => request.url.includes('/rpc/save_workout_set')).slice(before)
   assert.equal(laterCalls.filter(request => request.actor === '10000000-0000-4000-8000-000000000099').length, 0, 'AccountB must not replay accountA queued edits')

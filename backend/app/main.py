@@ -42,7 +42,7 @@ def create_app() -> FastAPI:
         if request.url.path.startswith("/mcp"):
             try:
                 token = extract_bearer_token(request.headers.get("authorization"))
-                await verify_supabase_token(token, settings)
+                request.state.authenticated_user = await verify_supabase_token(token, settings)
             except HTTPException as exc:
                 if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
                     raise

@@ -173,11 +173,14 @@ export function ProfilePage({ session, banners, workouts, workoutExercises, sets
     ])
     if (error) onStatus({ tone: 'danger', message: error.message })
     setMeasurements((measurementRows ?? []) as BodyMeasurement[])
-    const signed = await Promise.all(((photoRows ?? []) as ProgressPhoto[]).map(async (photo) => {
-      const { data } = await supabase.storage.from('progress-photos').createSignedUrl(photo.storage_path, 300)
-      return { ...photo, url: data?.signedUrl ?? '' }
-    }))
-    setPhotos(signed)
+    const photos = (photoRows ?? []) as ProgressPhoto[]
+    if (!photos.length) {
+      setPhotos([])
+      return
+    }
+    const { data } = await supabase.storage.from('progress-photos').createSignedUrls(photos.map((photo) => photo.storage_path), 300)
+    const urls = new Map((data ?? []).map((item) => [item.path, item.signedUrl ?? '']))
+    setPhotos(photos.map((photo) => ({ ...photo, url: urls.get(photo.storage_path) ?? '' })))
   }
 
   async function saveMeasurement() {
@@ -413,6 +416,7 @@ export function ProfilePage({ session, banners, workouts, workoutExercises, sets
         <div><h2 className="text-xl font-semibold">Private progress photos</h2><p className="mt-1 text-sm text-text-secondary">Images are re-encoded and stripped of metadata before storage.</p></div>
         <Input type="file" accept="image/*" aria-label="Progress photo" onChange={(event) => {
           const file = event.target.files?.[0]
+          event.currentTarget.value = ''
           if (file) void uploadPhoto(file)
         }} />
         <div className="grid grid-cols-3 gap-2">{photos.map((photo) => photo.url ? <div key={photo.id}><img className="aspect-square rounded-xl object-cover" src={photo.url} alt={`Progress from ${photo.measured_at}`} /><DeleteTextButton className="mt-1 w-full justify-center" label="Delete" onClick={() => void deletePhoto(photo.id)} /></div> : null)}</div>

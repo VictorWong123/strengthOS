@@ -80,6 +80,53 @@ type RoutineDraft = {
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
+
+  useEffect(() => {
+    let mounted = true
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return
+        activeAccountId = data.session?.user.id ?? null
+        setSession(data.session)
+        setIsAuthLoading(false)
+      })
+      .catch(() => {
+        if (!mounted) return
+        activeAccountId = null
+        setSession(null)
+        setIsAuthLoading(false)
+      })
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      activeAccountId = nextSession?.user.id ?? null
+      setSession(nextSession)
+      setIsAuthLoading(false)
+    })
+    return () => {
+      mounted = false
+      data.subscription.unsubscribe()
+    }
+  }, [])
+
+  if (window.location.pathname === '/oauth/consent') {
+    return <OAuthConsentPage session={session} isAuthLoading={isAuthLoading} onNavigate={(pathname) => window.location.assign(pathname)} />
+  }
+  if (!session && !isAuthLoading) return <AuthView />
+  if (!session) return null
+  return <SessionApp key={session.user.id} session={session} />
+}
+
+let activeAccountId: string | null = null
+
+function accountIsActive(userId: string) {
+  return activeAccountId === userId
+}
+
+function requireActiveAccount(userId: string) {
+  if (!accountIsActive(userId)) throw new Error('Account changed.')
+}
+
+function SessionApp({ session }: { session: Session }) {
   const [pathname, setPathname] = useState(() => window.location.pathname)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -266,30 +313,6 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    let mounted = true
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
-        if (!mounted) return
-        setSession(data.session)
-        setIsAuthLoading(false)
-      })
-      .catch(() => {
-        if (!mounted) return
-        setSession(null)
-        setIsAuthLoading(false)
-      })
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession)
-      setIsAuthLoading(false)
-    })
-    return () => {
-      mounted = false
-      data.subscription.unsubscribe()
-    }
-  }, [])
-
-  useEffect(() => {
     const onPopState = () => setPathname(window.location.pathname)
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
@@ -310,7 +333,7 @@ export function App() {
     if (!session) return
     setRoutineOrder(loadRoutineOrder(session.user.id))
     void loadData(true)
-  }, [session])
+  }, [session.user.id])
 
   useEffect(() => {
     if (!session || !isOnline || isInitialLoading) return
@@ -321,7 +344,7 @@ export function App() {
       for (const operation of operations) enqueueWorkoutMutation(operation)
     })
     void refreshConflicts(session.user.id)
-  }, [isInitialLoading, isOnline, session])
+  }, [isInitialLoading, isOnline, session.user.id])
 
   useEffect(() => {
     if (!selectedExercise) {
@@ -746,6 +769,7 @@ export function App() {
     if (!item) return null
     const operationId = crypto.randomUUID()
     const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      requireActiveAccount(session.user.id)
       const workout = workoutsRef.current.find((candidate) => candidate.id === item.workout_id)
       if (!workout) throw new Error('Workout not found.')
       const { data, error } = await supabase.rpc('add_workout_set', {
@@ -757,6 +781,7 @@ export function App() {
         p_values: { weight: values.weight, reps: values.reps, duration_seconds: values.duration_seconds, assistance_weight: values.assistance_weight, bodyweight: values.bodyweight, rpe: values.rpe, set_type: values.set_type },
       })
       let result = data as { set: WorkoutSet; revision: number } | null
+      requireActiveAccount(session.user.id)
       if (error) {
         const [{ data: existing, error: lookupError }, { data: latestWorkout }] = await Promise.all([
           supabase.from('workout_sets').select(WORKOUT_SET_COLUMNS).eq('id', values.id).maybeSingle(),
@@ -820,6 +845,7 @@ export function App() {
     if (firstForWorkout?.operationId !== operation.operationId) return
     const workout = workoutsRef.current.find((item) => item.id === operation.workoutId)
     if (!workout) return
+    requireActiveAccount(operation.userId)
     const { data, error } = await supabase.rpc('save_workout_set', {
       p_workout_id: operation.workoutId,
       p_set_id: operation.setId,
@@ -827,6 +853,7 @@ export function App() {
       p_operation_id: operation.operationId,
       p_patch: operation.patch,
     })
+    requireActiveAccount(operation.userId)
     if (error) {
       markSetSync(operation.setId, 'failed')
       setStatus({
@@ -894,10 +921,12 @@ export function App() {
     const pending = (await listSetMutations(session.user.id, true)).some((operation) => operation.setId === set.id)
     if (pending) { setStatus({ tone: 'warning', message: 'Resolve this set’s unsaved edit before deleting it.' }); return }
     const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      requireActiveAccount(session.user.id)
       const workout = workoutsRef.current.find((candidate) => candidate.id === item.workout_id)
       if (!workout) throw new Error('Workout not found.')
       const { data, error } = await supabase.rpc('delete_workout_set', { p_workout_id: workout.id, p_set_id: set.id, p_expected_revision: workout.revision, p_operation_id: crypto.randomUUID() })
       let result = data as { revision: number } | null
+      requireActiveAccount(session.user.id)
       if (error) {
         const [{ data: existing, error: lookupError }, { data: latestWorkout }] = await Promise.all([
           supabase.from('workout_sets').select('id').eq('id', set.id).maybeSingle(),
@@ -932,7 +961,9 @@ export function App() {
       if (!queued) return
       const firstForWorkout = (await listWorkoutMutations(operation.userId)).find((item) => item.workoutId === operation.workoutId)
       if (firstForWorkout?.operationId !== queued.operationId) return
+      requireActiveAccount(operation.userId)
       const { data, error } = await supabase.rpc('save_workout', { p_workout_id: queued.workoutId, p_expected_revision: queued.expectedRevision, p_operation_id: queued.operationId, p_patch: queued.patch })
+      requireActiveAccount(operation.userId)
       if (error) { setStatus({ tone: error.code === '40001' ? 'warning' : 'danger', message: error.code === '40001' ? 'Workout changed elsewhere. Review the preserved draft.' : 'Workout change preserved and will retry.' }); return }
       const result = data as { workout: Workout; revision: number }
       await removeSetMutation(queued.operationId)
@@ -945,6 +976,7 @@ export function App() {
   }
 
   async function saveWorkoutPatch(workoutId: string, patch: Partial<Workout>) {
+    if (!accountIsActive(session.user.id)) return false
     const current = workoutsRef.current.find((workout) => workout.id === workoutId)
     if (!current) return false
     const { data, error } = await supabase.rpc('save_workout', {
@@ -967,6 +999,7 @@ export function App() {
   async function finishWorkout() {
     if (!activeWorkout) return
     await mutationQueueRef.current.catch(() => undefined)
+    if (!accountIsActive(session.user.id)) return
     if (session) {
       const outstanding = (await listSetMutations(session.user.id, true)).filter((operation) => operation.workoutId === activeWorkout.id)
       const workoutOutstanding = (await listWorkoutMutations(session.user.id)).filter((operation) => operation.workoutId === activeWorkout.id)
@@ -989,6 +1022,7 @@ export function App() {
   async function discardWorkout() {
     if (!activeWorkout) return
     await mutationQueueRef.current.catch(() => undefined)
+    if (!accountIsActive(session.user.id)) return
     const queuedForWorkout = session ? (await listSetMutations(session.user.id, true)).filter((operation) => operation.workoutId === activeWorkout.id) : []
     const queuedWorkoutChanges = session ? (await listWorkoutMutations(session.user.id)).filter((operation) => operation.workoutId === activeWorkout.id) : []
 
@@ -1164,6 +1198,7 @@ export function App() {
 
   async function mutateWorkoutExercise(workoutId: string, action: 'add' | 'remove' | 'replace', options: { targetId?: string; newId?: string; exercise?: Exercise; order?: number }) {
     const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      requireActiveAccount(session.user.id)
       const workout = workoutsRef.current.find((candidate) => candidate.id === workoutId)
       if (!workout) throw new Error('Workout not found.')
       const { data, error } = await supabase.rpc('mutate_workout_exercise', {
@@ -1171,6 +1206,7 @@ export function App() {
         p_target_id: options.targetId ?? null, p_new_id: options.newId ?? null, p_exercise_id: options.exercise?.id ?? null,
         p_exercise_order: options.order ?? null, p_logging_mode: options.exercise?.logging_mode ?? null, p_source_name: options.exercise?.name ?? null,
       })
+      requireActiveAccount(session.user.id)
       if (error) throw Object.assign(new Error(error.message), { code: error.code })
       const result = data as { workout_exercise: WorkoutExercise | null; removed_id: string | null; revision: number }
       setWorkouts((current) => current.map((candidate) => candidate.id === workoutId ? { ...candidate, revision: result.revision } : candidate))
@@ -1211,9 +1247,11 @@ export function App() {
 
   async function saveWorkoutExercisePatches(workoutId: string, patches: Array<Record<string, unknown>>) {
     const task = mutationQueueRef.current.catch(() => undefined).then(async () => {
+      requireActiveAccount(session.user.id)
       const workout = workoutsRef.current.find((candidate) => candidate.id === workoutId)
       if (!workout) throw new Error('Workout not found.')
       const { data, error } = await supabase.rpc('save_workout_exercises', { p_workout_id: workoutId, p_expected_revision: workout.revision, p_operation_id: crypto.randomUUID(), p_patches: patches })
+      requireActiveAccount(session.user.id)
       if (error) throw Object.assign(new Error(error.message), { code: error.code })
       const result = data as { workout_exercises: WorkoutExercise[]; revision: number }
       setWorkoutExercises((current) => current.map((candidate) => result.workout_exercises.find((saved) => saved.id === candidate.id) ?? candidate))
@@ -1419,14 +1457,10 @@ export function App() {
 
   const routineActionTarget = selectedRoutineId ? orderedRoutines.find((routine) => routine.id === selectedRoutineId) ?? null : null
 
-  if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} isAuthLoading={isAuthLoading} onNavigate={navigate} />
-  if (session && route.name === 'login') {
+  if (route.name === 'oauth-consent') return <OAuthConsentPage session={session} isAuthLoading={false} onNavigate={navigate} />
+  if (route.name === 'login') {
     return <LoginSessionRedirect />
   }
-  if (!session && !isAuthLoading) {
-    return <AuthView />
-  }
-  if (!session) return null
 
   return (
     <AppShell currentPath={route.pathname} onNavigate={navigateFromShell}>

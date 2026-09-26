@@ -1,0 +1,9 @@
+.git
+.env*
+.mcp.json
+test-account.txt
+.venv
+__pycache__
+.pytest_cache
+.cache
+pytest-cache-files-*

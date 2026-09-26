@@ -1,10 +1,13 @@
 """Authenticated progress-photo upload and deletion."""
 
+import asyncio
 from datetime import date
 from io import BytesIO
+from threading import BoundedSemaphore
 from typing import Annotated
 from uuid import UUID, uuid4
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -16,7 +19,10 @@ router = APIRouter(prefix="/progress-photos", tags=["progress-photos"])
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 24_000_000
 MAX_DIMENSION = 4096
+MAX_CONCURRENT_UPLOADS = 1
+UPLOAD_READ_TIMEOUT_SECONDS = 30
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+_upload_slots = BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
 
 
 @router.post("")
@@ -28,38 +34,72 @@ async def upload_progress_photo(
 ) -> dict[str, object]:
     """Validate, resize, strip metadata, and store one private WebP photo."""
 
-    content = bytearray()
-    async for chunk in request.stream():
-        content.extend(chunk)
-        if len(content) > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Photo is too large.")
-    encoded = sanitize_photo(bytes(content))
-    photo_id = uuid4()
-    storage_path = f"{user.id}/{photo_id}.webp"
-    row = {
-        "id": str(photo_id),
-        "user_id": user.id,
-        "measured_at": measured_at.isoformat(),
-        "storage_path": storage_path,
-        "caption": caption.strip() if caption and caption.strip() else None,
-    }
-    settings = get_settings()
+    acquire_upload_slot()
     try:
-        async with SupabaseService(settings) as service:
-            saved = await service.insert("progress_photos", row)
-            try:
-                await service.upload_storage_object("progress-photos", storage_path, encoded, "image/webp")
-            except Exception:
+        encoded = await read_and_sanitize_photo(request)
+        photo_id = uuid4()
+        storage_path = f"{user.id}/{photo_id}.webp"
+        row = {
+            "id": str(photo_id),
+            "user_id": user.id,
+            "measured_at": measured_at.isoformat(),
+            "storage_path": storage_path,
+            "caption": caption.strip() if caption and caption.strip() else None,
+        }
+        settings = get_settings()
+        try:
+            async with SupabaseService(settings) as service:
+                saved = await service.insert("progress_photos", row)
                 try:
-                    await service.delete("progress_photos", id=f"eq.{photo_id}", user_id=f"eq.{user.id}")
+                    await service.upload_storage_object("progress-photos", storage_path, encoded, "image/webp")
                 except Exception:
-                    pass
-                raise
-    except HTTPException:
+                    try:
+                        await service.delete("progress_photos", id=f"eq.{photo_id}", user_id=f"eq.{user.id}")
+                    except Exception:
+                        pass
+                    raise
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Unable to store progress photo.") from exc
+        return saved
+    finally:
+        _upload_slots.release()
+
+
+def acquire_upload_slot() -> None:
+    """Fail fast before buffering when upload memory and CPU are fully admitted."""
+
+    if not _upload_slots.acquire(blocking=False):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Photo processing is busy.")
+
+
+async def read_and_sanitize_photo(request: Request) -> bytes:
+    """Bound and sanitize an admitted upload without blocking the event loop."""
+
+    content = bytearray()
+    try:
+        async with asyncio.timeout(UPLOAD_READ_TIMEOUT_SECONDS):
+            async for chunk in request.stream():
+                if len(content) + len(chunk) > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Photo is too large.")
+                content.extend(chunk)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_408_REQUEST_TIMEOUT, detail="Photo upload timed out.") from exc
+    task = asyncio.create_task(asyncio.to_thread(sanitize_photo, bytes(content)))
+    task.add_done_callback(lambda completed: None if completed.cancelled() else completed.exception())
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        with anyio.CancelScope(shield=True):
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="Unable to store progress photo.") from exc
-    return saved
 
 
 @router.delete("/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -95,12 +135,12 @@ def sanitize_photo(content: bytes) -> bytes:
         with Image.open(BytesIO(content)) as source:
             if source.width * source.height > MAX_IMAGE_PIXELS:
                 raise HTTPException(status_code=400, detail="Photo dimensions are too large.")
-            oriented = ImageOps.exif_transpose(source)
-            image = oriented.convert("RGBA" if oriented.has_transparency_data else "RGB")
-            image.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
-            output = BytesIO()
-            image.save(output, format="WEBP", quality=90, method=4, exif=b"", icc_profile=None)
-            return output.getvalue()
+            ImageOps.exif_transpose(source, in_place=True)
+            source.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
+            with source.convert("RGBA" if source.has_transparency_data else "RGB") as image:
+                output = BytesIO()
+                image.save(output, format="WEBP", quality=90, method=4, exif=b"", icc_profile=None)
+                return output.getvalue()
     except HTTPException:
         raise
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError) as exc:

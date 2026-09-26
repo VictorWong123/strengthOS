@@ -6,6 +6,7 @@ from typing import Any, TypeVar
 from fastapi import HTTPException
 from fastmcp import FastMCP
 from fastmcp.dependencies import CurrentHeaders
+from fastmcp.server.dependencies import get_http_request
 
 from app.auth.dependencies import extract_bearer_token, verify_supabase_token
 from app.config import Settings
@@ -26,8 +27,14 @@ def create_mcp_app(settings: Settings):
     ) -> ToolResult:
         """Authenticate an MCP request and run a user-scoped tool handler."""
 
-        authorization = headers.get("authorization") or headers.get("Authorization")
-        user = await verify_supabase_token(extract_bearer_token(authorization), settings)
+        try:
+            request = get_http_request()
+        except RuntimeError:
+            request = None
+        user = getattr(request.state, "authenticated_user", None) if request else None
+        if user is None:
+            authorization = headers.get("authorization") or headers.get("Authorization")
+            user = await verify_supabase_token(extract_bearer_token(authorization), settings)
         try:
             return await handler(user.id)
         except ValueError as exc:

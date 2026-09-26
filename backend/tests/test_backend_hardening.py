@@ -1,10 +1,14 @@
 import asyncio
+import gc
 import shutil
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 from pydantic import SecretStr
 
 from app import main as app_main
@@ -362,6 +366,16 @@ async def test_exercise_image_proxy_coalesces_ten_concurrent_opens(monkeypatch: 
     assert all(response.body == b"GIF89a" for response in responses)
 
 
+def test_exercise_image_fetch_locks_do_not_accumulate() -> None:
+    exercise_images._fetch_locks.clear()
+
+    for index in range(100):
+        exercise_images.fetch_lock(f"missing-{index}", "180")
+    gc.collect()
+
+    assert len(exercise_images._fetch_locks) == 0
+
+
 class FakeResponse:
     def __init__(
         self,
@@ -666,6 +680,44 @@ def test_authenticated_mcp_request_checks_supabase_user_token(
     assert calls
     assert set(calls) == {"access-token"}
     assert response.status_code != 401
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_reuses_outer_verified_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings()
+    calls = 0
+
+    async def outer_verify(_token: str, _settings: Settings):
+        nonlocal calls
+        calls += 1
+        return auth_dependencies.AuthenticatedUser(id="user-1")
+
+    async def inner_verify(*_args: object, **_kwargs: object):
+        raise AssertionError("MCP tool must reuse middleware authentication")
+
+    async def recent_workouts(_self, user_id: str, _days: int) -> dict[str, str]:
+        return {"user_id": user_id}
+
+    monkeypatch.setattr(app_main, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_main, "verify_supabase_token", outer_verify)
+    monkeypatch.setattr("app.mcp.server.verify_supabase_token", inner_verify)
+    monkeypatch.setattr(TrainingAnalyticsService, "get_recent_workouts", recent_workouts)
+    app = app_main.create_app()
+
+    def client_factory(**kwargs) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", **kwargs)
+
+    transport = StreamableHttpTransport(
+        "http://test/mcp/",
+        headers={"Authorization": "Bearer access-token"},
+        httpx_client_factory=client_factory,
+    )
+    async with app.router.lifespan_context(app):
+        async with Client(transport) as client:
+            result = await client.call_tool("get_recent_workouts", {"days": 1})
+
+    assert calls >= 1
+    assert result.data == {"user_id": "user-1"}
 
 
 @pytest.mark.asyncio
