@@ -588,10 +588,28 @@ def test_settings_preserves_legacy_frontend_origin() -> None:
     settings = make_settings(frontend_url="https://new.example", frontend_origin="https://old.example")
 
     assert settings.allowed_frontend_origins == [
+        "capacitor://localhost",
         "http://localhost:5173",
         "https://new.example",
         "https://old.example",
     ]
+
+
+def test_capacitor_origin_can_call_authenticated_backend_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_main, "get_settings", lambda: make_settings())
+
+    with TestClient(app_main.create_app()) as client:
+        response = client.options(
+            "/account",
+            headers={
+                "Origin": "capacitor://localhost",
+                "Access-Control-Request-Method": "DELETE",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "capacitor://localhost"
 
 
 @pytest.mark.asyncio

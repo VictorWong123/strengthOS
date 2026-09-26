@@ -87,6 +87,11 @@ export function AuthView() {
             </p>
           </div>
           {message ? <p className="text-sm text-gray-400">{message}</p> : null}
+          <p className="text-center text-sm text-gray-400">
+            <a className="hover:text-white hover:underline" href="/support">Support</a>
+            <span aria-hidden="true"> · </span>
+            <a className="hover:text-white hover:underline" href="/privacy">Privacy</a>
+          </p>
         </Card>
       </form>
     </main>

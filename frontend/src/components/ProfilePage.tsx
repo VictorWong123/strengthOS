@@ -6,9 +6,12 @@ import { TrendChart } from './charts/TrendChart'
 import { DeleteTextButton, Field, IconButton, Input, MetricCard, MobileHeader, Pill, PrimaryButton, SecondaryButton, Select, SurfaceCard, Textarea } from './ui'
 import type { BodyMeasurement, ProgressPhoto, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 import { isWorkingSet, loadedVolume } from '../lib/trainingMetrics'
+import { clearAccountLocalStorage, finishPendingAccountCleanup, markPendingAccountCleanup } from '../lib/accountStorage'
+import { clearUserMutations } from '../lib/offlineOutbox'
 
 const PROFILE_COLUMNS = 'id, display_name, first_name, last_name, age, body_weight_lbs, height_inches, training_goal, training_experience, limitations'
 const apiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
+const MAX_PROGRESS_PHOTO_BYTES = 10 * 1024 * 1024
 
 type StatusMessage = {
   tone: 'warning' | 'danger' | 'success'
@@ -23,6 +26,7 @@ type ProfilePageProps = {
   sets: WorkoutSet[]
   onNavigate: (pathname: string) => void
   onStatus: (status: StatusMessage) => void
+  onPrepareAccountDeletion: () => Promise<void>
 }
 
 type WorkoutPerformance = {
@@ -79,7 +83,7 @@ function weeklyBodyweightAverage(measurements: BodyMeasurement[]) {
   return source.length ? (source.reduce((sum, value) => sum + value, 0) / source.length).toFixed(1) : '—'
 }
 
-export function ProfilePage({ session, banners, workouts, workoutExercises, sets, onNavigate, onStatus }: ProfilePageProps) {
+export function ProfilePage({ session, banners, workouts, workoutExercises, sets, onNavigate, onStatus, onPrepareAccountDeletion }: ProfilePageProps) {
   const [draft, setDraft] = useState<ProfileDraft>(EMPTY_PROFILE_DRAFT)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -201,6 +205,14 @@ export function ProfilePage({ session, banners, workouts, workoutExercises, sets
   async function uploadPhoto(file: File) {
     if (!session || !apiUrl) {
       onStatus({ tone: 'danger', message: 'Photo service is not configured.' })
+      return
+    }
+    if (!file.type.startsWith('image/')) {
+      onStatus({ tone: 'warning', message: 'Choose an image file.' })
+      return
+    }
+    if (file.size > MAX_PROGRESS_PHOTO_BYTES) {
+      onStatus({ tone: 'warning', message: 'Photo must be 10 MB or smaller.' })
       return
     }
     let response: Response
@@ -427,6 +439,11 @@ export function ProfilePage({ session, banners, workouts, workoutExercises, sets
           Logout
         </SecondaryButton>
       </SurfaceCard>
+      <SurfaceCard className="space-y-3">
+        <h2 className="text-xl font-semibold">Help &amp; legal</h2>
+        <SecondaryButton className="w-full" onClick={() => window.location.assign('/support')}>Support</SecondaryButton>
+        <SecondaryButton className="w-full" onClick={() => window.location.assign('/privacy')}>Privacy</SecondaryButton>
+      </SurfaceCard>
       <SurfaceCard className="space-y-4 border-red-500/30">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-300">
@@ -558,6 +575,15 @@ export function ProfilePage({ session, banners, workouts, workoutExercises, sets
       return
     }
 
+    await onPrepareAccountDeletion()
+    clearAccountLocalStorage(localStorage, session.user.id, workouts.map((workout) => workout.id))
+    markPendingAccountCleanup(localStorage, session.user.id)
+    try {
+      await clearUserMutations(session.user.id)
+      finishPendingAccountCleanup(localStorage, session.user.id)
+    } catch {
+      // App startup retries cleanup while the durable marker remains.
+    }
     await supabase.auth.signOut()
   }
 }

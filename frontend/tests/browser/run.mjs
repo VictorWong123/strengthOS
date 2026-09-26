@@ -31,7 +31,7 @@ try {
       await new Promise(resolve => setTimeout(resolve, 100))
     }
   }
-  const allSuites = ['features', 'recovery', 'surfaces', 'timers', 'progress', 'workflows', 'media', 'import-scale', 'history', 'analytics', 'records', 'grouping', 'edge']
+  const allSuites = ['features', 'recovery', 'account-deletion', 'surfaces', 'timers', 'progress', 'workflows', 'media', 'import-scale', 'history', 'analytics', 'records', 'grouping', 'edge']
   const selectedSuites = process.env.QA_SUITES ? process.env.QA_SUITES.split(',') : allSuites
   if (selectedSuites.some(suite => !allSuites.includes(suite))) throw new Error('Unknown QA suite')
   for (const suite of selectedSuites) {

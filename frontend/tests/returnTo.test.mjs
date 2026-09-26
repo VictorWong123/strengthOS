@@ -12,7 +12,7 @@ const transpiled = ts.transpileModule(source, {
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString('base64')}`
 const { getSafeReturnTo, getSafeReturnToFromSearch, resolveReturnToFromSearch } = await import(moduleUrl)
 
-const origin = 'https://strength-os-nu.vercel.app'
+const origin = 'https://strength-os-nu.vercel.app/login'
 
 assert.equal(
   getSafeReturnTo('/oauth/consent?authorization_id=auth-123', origin),
@@ -35,5 +35,8 @@ assert.equal(getSafeReturnToFromSearch('', origin), '/')
 assert.equal(getSafeReturnTo('//evil.example/path', origin), '/')
 assert.equal(getSafeReturnTo('https://evil.example/path', origin), '/')
 assert.equal(getSafeReturnTo('/\\evil', origin), '/')
+assert.equal(getSafeReturnTo('/profile', 'capacitor://localhost/login'), '/profile')
+assert.equal(getSafeReturnTo('//evil.example/path', 'capacitor://localhost/login'), '/')
+assert.equal(getSafeReturnTo('https://evil.example/path', 'capacitor://localhost/login'), '/')
 
 console.log('returnTo tests passed')

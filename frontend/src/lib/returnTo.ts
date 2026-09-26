@@ -7,34 +7,35 @@ export type ReturnToResolution = {
   validatedReturnTo: string
 }
 
-export function getSafeReturnTo(value: string | null | undefined, origin = window.location.origin): string {
+export function getSafeReturnTo(value: string | null | undefined, baseHref = window.location.href): string {
   if (!value) return '/'
 
   if (!value.startsWith('/') || value.startsWith('//')) return DEFAULT_RETURN_TO
   if (value.includes('\\')) return DEFAULT_RETURN_TO
 
   try {
-    const url = new URL(value, origin)
-    if (url.origin !== origin) return DEFAULT_RETURN_TO
+    const base = new URL(baseHref)
+    const url = new URL(value, base)
+    if (url.protocol !== base.protocol || url.host !== base.host) return DEFAULT_RETURN_TO
     return `${url.pathname}${url.search}${url.hash}`
   } catch {
     return DEFAULT_RETURN_TO
   }
 }
 
-export function resolveReturnToFromSearch(search = window.location.search, origin = window.location.origin): ReturnToResolution {
+export function resolveReturnToFromSearch(search = window.location.search, baseHref = window.location.href): ReturnToResolution {
   const rawReturnTo = getRawQueryParam(search, 'returnTo')
   const parsedReturnTo = new URLSearchParams(search).get('returnTo')
   return {
     rawSearch: search,
     rawReturnTo,
     parsedReturnTo,
-    validatedReturnTo: getSafeReturnTo(parsedReturnTo, origin),
+    validatedReturnTo: getSafeReturnTo(parsedReturnTo, baseHref),
   }
 }
 
-export function getSafeReturnToFromSearch(search = window.location.search, origin = window.location.origin): string {
-  return resolveReturnToFromSearch(search, origin).validatedReturnTo
+export function getSafeReturnToFromSearch(search = window.location.search, baseHref = window.location.href): string {
+  return resolveReturnToFromSearch(search, baseHref).validatedReturnTo
 }
 
 export function currentInternalPath(): string {

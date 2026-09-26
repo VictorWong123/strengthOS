@@ -1,0 +1,44 @@
+name: iOS
+
+on:
+  push:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run ios:sync:ci
+        working-directory: frontend
+        env:
+          VITE_API_URL: https://api.example.com
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
+          VITE_SUPABASE_URL: https://example.supabase.co
+      - run: plutil -lint frontend/ios/App/App/Info.plist frontend/ios/App/App/PrivacyInfo.xcprivacy
+      - run: >-
+          xcodebuild -project frontend/ios/App/App.xcodeproj -scheme App
+          -configuration Debug -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - run: >-
+          xcodebuild -project frontend/ios/App/App.xcodeproj -scheme App
+          -configuration Release -sdk iphoneos
+          -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO
+          -archivePath "$RUNNER_TEMP/strengthOS.xcarchive" archive
+      - run: test -f "$RUNNER_TEMP/strengthOS.xcarchive/Products/Applications/App.app/PrivacyInfo.xcprivacy"

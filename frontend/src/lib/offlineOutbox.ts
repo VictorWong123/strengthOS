@@ -1,4 +1,5 @@
 import type { WorkoutSet } from './types'
+import { accountIsActive } from './accountFence'
 
 const DATABASE = 'strengthos-recovery'
 const STORE = 'operations'
@@ -26,7 +27,7 @@ export type WorkoutMutation = {
 }
 
 export async function queueSetMutation(operation: SetMutation) {
-  return request<void>('readwrite', (store) => store.put(operation))
+  return request<void>('readwrite', (store) => accountIsActive(operation.userId) ? store.put(operation) : store.delete(operation.operationId))
 }
 
 export async function removeSetMutation(operationId: string) {
@@ -54,7 +55,9 @@ export async function listSetMutations(userId: string, includeConflicts = false)
   return operations.filter((operation): operation is SetMutation => operation.kind !== 'workout' && operation.userId === userId && (includeConflicts || operation.state !== 'conflict')).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 
-export async function queueWorkoutMutation(operation: WorkoutMutation) { return request<void>('readwrite', (store) => store.put(operation)) }
+export async function queueWorkoutMutation(operation: WorkoutMutation) {
+  return request<void>('readwrite', (store) => accountIsActive(operation.userId) ? store.put(operation) : store.delete(operation.operationId))
+}
 export async function listWorkoutMutations(userId: string): Promise<WorkoutMutation[]> {
   const operations = await request<Array<SetMutation | WorkoutMutation>>('readonly', (store) => store.getAll())
   return operations.filter((operation): operation is WorkoutMutation => operation.kind === 'workout' && operation.userId === userId).sort((a, b) => a.createdAt.localeCompare(b.createdAt))

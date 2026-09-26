@@ -126,9 +126,11 @@ function resolveMediaUrl(src: string | null): string | null {
 
 function isApiMediaUrl(url: string) {
   try {
-    const parsed = new URL(url, window.location.origin)
-    const expectedOrigin = apiUrl ? new URL(apiUrl, window.location.origin).origin : window.location.origin
-    return parsed.origin === expectedOrigin && /^\/(?:api\/)?exercise-images\/[A-Za-z0-9_-]+$/.test(parsed.pathname)
+    const parsed = new URL(url, window.location.href)
+    const expected = new URL(apiUrl ?? window.location.href, window.location.href)
+    return parsed.protocol === expected.protocol
+      && parsed.host === expected.host
+      && /^\/(?:api\/)?exercise-images\/[A-Za-z0-9_-]+$/.test(parsed.pathname)
   } catch {
     return false
   }

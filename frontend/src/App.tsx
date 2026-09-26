@@ -9,6 +9,7 @@ import { ExercisesPage } from './components/ExercisesPage'
 import { HomePage } from './components/HomePage'
 import { OAuthConsentPage } from './components/OAuthConsentPage'
 import { ProfilePage } from './components/ProfilePage'
+import { PrivacyPage, SupportPage } from './components/PublicInfoPages'
 import { RoutineEditorPage } from './components/RoutineEditorPage'
 import { RoutineActionList } from './components/RoutineUI'
 import { WorkoutPage } from './components/WorkoutPage'
@@ -22,9 +23,11 @@ import {
   SecondaryButton,
 } from './components/ui'
 import { assignReturnToAfterAuth, logAuthEvent } from './lib/authRedirect'
+import { finishPendingAccountCleanup, pendingAccountCleanup } from './lib/accountStorage'
+import { accountIsActive, fenceAccountMutations, persistForActiveAccount, requireActiveAccount, setActiveAccount } from './lib/accountFence'
 import { dateKeyInTimeZone, DEFAULT_TIME_ZONE, normalizeTimeZone, sundayDateKey } from './lib/dateTime'
 import { loadExerciseCatalog } from './lib/exerciseCatalog'
-import { getSetMutation, listSetMutations, listWorkoutMutations, markWorkoutMutationsConflict, queueSetMutation, queueWorkoutMutation, rebasePendingWorkoutMutations, removeSetMutation, type SetMutation, type WorkoutMutation } from './lib/offlineOutbox'
+import { clearUserMutations, getSetMutation, listSetMutations, listWorkoutMutations, markWorkoutMutationsConflict, queueSetMutation, queueWorkoutMutation, rebasePendingWorkoutMutations, removeSetMutation, type SetMutation, type WorkoutMutation } from './lib/offlineOutbox'
 import { estimatedOneRepMax } from './lib/performance'
 import { supabase } from './lib/supabase'
 import { formatRoutineTarget, parseRoutineTarget } from './lib/training'
@@ -82,23 +85,31 @@ export function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(true)
 
   useEffect(() => {
+    const userId = pendingAccountCleanup(localStorage)
+    if (!userId) return
+    void clearUserMutations(userId)
+      .then(() => finishPendingAccountCleanup(localStorage, userId))
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
     let mounted = true
     supabase.auth
       .getSession()
       .then(({ data }) => {
         if (!mounted) return
-        activeAccountId = data.session?.user.id ?? null
+        setActiveAccount(data.session?.user.id ?? null)
         setSession(data.session)
         setIsAuthLoading(false)
       })
       .catch(() => {
         if (!mounted) return
-        activeAccountId = null
+        setActiveAccount(null)
         setSession(null)
         setIsAuthLoading(false)
       })
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      activeAccountId = nextSession?.user.id ?? null
+      setActiveAccount(nextSession?.user.id ?? null)
       setSession(nextSession)
       setIsAuthLoading(false)
     })
@@ -111,19 +122,15 @@ export function App() {
   if (window.location.pathname === '/oauth/consent') {
     return <OAuthConsentPage session={session} isAuthLoading={isAuthLoading} onNavigate={(pathname) => window.location.assign(pathname)} />
   }
+  if (window.location.pathname === '/privacy') {
+    return <PrivacyPage onNavigate={(pathname) => window.location.assign(pathname)} />
+  }
+  if (window.location.pathname === '/support') {
+    return <SupportPage onNavigate={(pathname) => window.location.assign(pathname)} />
+  }
   if (!session && !isAuthLoading) return <AuthView />
   if (!session) return null
   return <SessionApp key={session.user.id} session={session} />
-}
-
-let activeAccountId: string | null = null
-
-function accountIsActive(userId: string) {
-  return activeAccountId === userId
-}
-
-function requireActiveAccount(userId: string) {
-  if (!accountIsActive(userId)) throw new Error('Account changed.')
 }
 
 function SessionApp({ session }: { session: Session }) {
@@ -156,6 +163,7 @@ function SessionApp({ session }: { session: Session }) {
   const exerciseHistoryRequestRef = useRef(0)
   const workoutsRef = useRef<Workout[]>([])
   const mutationQueueRef = useRef(Promise.resolve())
+  const mutationPersistenceRef = useRef(new Set<Promise<unknown>>())
   const [setSyncState, setSetSyncState] = useState<Map<string, 'pending' | 'failed'>>(() => new Map())
   const [prAlertsEnabled, setPrAlertsEnabled] = useState(() => localStorage.getItem('strengthos:pr-alerts') !== '0')
   const [accountTimeZone, setAccountTimeZone] = useState(DEFAULT_TIME_ZONE)
@@ -817,7 +825,8 @@ function SessionApp({ session }: { session: Session }) {
       createdAt: new Date().toISOString(),
     }
     try {
-      await queueSetMutation(operation)
+      const persisted = await persistActiveMutation(operation.userId, operation.operationId, () => queueSetMutation(operation))
+      if (!persisted) return
       markSetSync(set.id, 'pending')
       if (navigator.onLine) enqueueSetMutation(operation)
     } catch {
@@ -901,7 +910,8 @@ function SessionApp({ session }: { session: Session }) {
   async function retryConflicts() {
     for (const conflict of conflictedMutations) {
       const operation = { ...conflict, operationId: crypto.randomUUID(), expectedRevision: workoutsRef.current.find((item) => item.id === conflict.workoutId)?.revision ?? conflict.expectedRevision, state: 'pending' as const, createdAt: new Date().toISOString() }
-      await queueSetMutation(operation)
+      const persisted = await persistActiveMutation(operation.userId, operation.operationId, () => queueSetMutation(operation))
+      if (!persisted) return
       await removeSetMutation(conflict.operationId)
       markSetSync(operation.setId, 'pending')
       enqueueSetMutation(operation)
@@ -952,7 +962,22 @@ function SessionApp({ session }: { session: Session }) {
     setWorkouts((current) => current.map((candidate) => (candidate.id === workout.id ? next : candidate)))
     if (!session) return
     const operation: WorkoutMutation = { kind: 'workout', operationId: crypto.randomUUID(), userId: session.user.id, workoutId: workout.id, expectedRevision: workout.revision, patch, createdAt: new Date().toISOString() }
-    try { await queueWorkoutMutation(operation); enqueueWorkoutMutation(operation) } catch { setStatus({ tone: 'danger', message: 'Unable to preserve workout changes for retry.' }) }
+    try {
+      const persisted = await persistActiveMutation(operation.userId, operation.operationId, () => queueWorkoutMutation(operation))
+      if (persisted) enqueueWorkoutMutation(operation)
+    } catch {
+      setStatus({ tone: 'danger', message: 'Unable to preserve workout changes for retry.' })
+    }
+  }
+
+  function persistActiveMutation(userId: string, operationId: string, persist: () => Promise<unknown>) {
+    const task = persistForActiveAccount(userId, operationId, persist, removeSetMutation)
+    mutationPersistenceRef.current.add(task)
+    void task.then(
+      () => mutationPersistenceRef.current.delete(task),
+      () => mutationPersistenceRef.current.delete(task),
+    )
+    return task
   }
 
   function enqueueWorkoutMutation(operation: WorkoutMutation) {
@@ -1729,6 +1754,7 @@ function SessionApp({ session }: { session: Session }) {
             sets={sets}
             onNavigate={navigate}
             onStatus={setStatus}
+            onPrepareAccountDeletion={() => fenceAccountMutations(session.user.id, () => [mutationQueueRef.current, ...mutationPersistenceRef.current])}
           />
         )
     }

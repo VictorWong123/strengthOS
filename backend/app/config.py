@@ -5,6 +5,8 @@ from functools import lru_cache
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+CAPACITOR_ORIGIN = "capacitor://localhost"
+
 
 class Settings(BaseSettings):
     """Runtime configuration for backend jobs, authenticated APIs, and MCP tools."""
@@ -54,7 +56,7 @@ class Settings(BaseSettings):
     def allowed_frontend_origins(self) -> list[str]:
         """Return configured browser origins, including the legacy env name."""
 
-        return sorted({"http://localhost:5173", self.frontend_url, self.frontend_origin} - {""})
+        return sorted({"http://localhost:5173", CAPACITOR_ORIGIN, self.frontend_url, self.frontend_origin} - {""})
 
 
 @lru_cache

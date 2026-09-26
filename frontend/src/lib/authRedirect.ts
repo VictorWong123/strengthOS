@@ -26,7 +26,7 @@ export function logAuthEvent(label: string, payload: Record<string, unknown> = {
 
 export function assignReturnToAfterAuth(source: AuthRedirectSource) {
   const resolution = resolveReturnToFromSearch()
-  const target = new URL(resolution.validatedReturnTo, window.location.origin).toString()
+  const target = new URL(resolution.validatedReturnTo, window.location.href).toString()
   if (shouldLogAuthRedirect(resolution)) {
     logAuthRedirect('window.location.assign target', {
       source,

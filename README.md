@@ -80,6 +80,10 @@ cd frontend
 npm run dev
 ```
 
+## iPhone app
+
+The iPhone app packages the existing React frontend with Capacitor; Supabase and the FastAPI backend remain shared with the website. Setup, device testing, signing, and App Store steps are in [docs/ios-app-store.md](docs/ios-app-store.md).
+
 ## Exercise Catalog Sync
 
 Import the configured exercise provider into Supabase:

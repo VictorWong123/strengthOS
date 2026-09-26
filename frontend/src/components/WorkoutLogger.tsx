@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Dumbbell, Minus, Plus, Volume2, VolumeX, X } from 'lucide-react'
 import type { Exercise, ExerciseSessionEvidence, LoggingMode, Workout, WorkoutExercise, WorkoutSet } from '../lib/types'
 import { calculatePlatesPerSide, exerciseModeKey, isWorkingSet, loadedVolume, progressionSuggestion, warmupSets } from '../lib/trainingMetrics'
+import { isNativeApp, setNativeKeepAwake, vibrateWorkoutAlert } from '../lib/nativeDevice'
 import { ExerciseSummary } from './ExerciseSummary'
 import {
   BottomSheet,
@@ -150,7 +151,21 @@ export function WorkoutLogger({
   }, [restEndAt, workout])
 
   useEffect(() => {
-    if (!keepAwake || !('wakeLock' in navigator)) return
+    if (!keepAwake) return
+    if (isNativeApp()) {
+      let active = true
+      const syncNativeWakeLock = () => void setNativeKeepAwake(document.visibilityState === 'visible').catch(() => {
+        if (active) setKeepAwake(false)
+      })
+      syncNativeWakeLock()
+      document.addEventListener('visibilitychange', syncNativeWakeLock)
+      return () => {
+        active = false
+        document.removeEventListener('visibilitychange', syncNativeWakeLock)
+        void setNativeKeepAwake(false).catch(() => undefined)
+      }
+    }
+    if (!('wakeLock' in navigator)) return
     let active = true
     const acquire = () => void (navigator as Navigator & { wakeLock: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> } }).wakeLock.request('screen').then((lock) => {
         if (active) wakeLockRef.current = lock
@@ -217,7 +232,7 @@ export function WorkoutLogger({
 
   function finishRestTimer() {
     if (!alertsMuted) playTimerSound(alertVolume)
-    if (vibrationEnabled) navigator.vibrate?.([150, 80, 150])
+    if (vibrationEnabled) void vibrateWorkoutAlert()
     setRestEndAt(null)
   }
 
